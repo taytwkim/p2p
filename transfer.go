@@ -38,6 +38,10 @@ func (n *Node) setupTransferProtocol() {
 }
 
 func (n *Node) doFetch(cid string, targetPeerID string) error {
+	return n.doFetchWithProgress(cid, targetPeerID, nil, nil)
+}
+
+func (n *Node) doFetchWithProgress(cid string, targetPeerID string, progress func(written, total int64), status func(format string, args ...any)) error {
 	var target peer.ID
 	var err error
 	var providerInfo peer.AddrInfo
@@ -56,18 +60,40 @@ func (n *Node) doFetch(cid string, targetPeerID string) error {
 		if len(providers) == 0 {
 			return errors.New("no providers known for this CID. Use 'whohas' first")
 		}
+		validated := false
+		for _, candidate := range providers {
+			targetAddr := addrInfoToP2PAddr(candidate)
+			if targetAddr == "" {
+				continue
+			}
 
-		target = providers[0].ID
-		providerInfo = providers[0]
+			hasCID, err := n.doHas(targetAddr, cid)
+			if err != nil {
+				log.Printf("Skipping provider %s during HAS probe: %v", candidate.ID, err)
+				continue
+			}
+			if !hasCID {
+				log.Printf("Skipping stale provider %s for CID %s", candidate.ID, cid)
+				continue
+			}
+
+			target = candidate.ID
+			providerInfo = candidate
+			validated = true
+			break
+		}
+		if !validated {
+			return errors.New("no live providers confirmed for this CID")
+		}
 	}
 
-	log.Printf("Fetching %s from %s", cid, target)
+	emitFetchStatus(status, "Fetching %s from %s", cid, target)
 
 	ctx := context.Background() // For transfer, we just use background, but real app might want timeout
 
 	if providerInfo.ID != "" && len(providerInfo.Addrs) > 0 {
 		if err := n.Host.Connect(ctx, providerInfo); err != nil {
-			log.Printf("Warning: failed to explicitly connect to provider: %v", err)
+			emitFetchStatus(status, "Warning: failed to explicitly connect to provider: %v", err)
 		}
 	}
 
@@ -95,7 +121,7 @@ func (n *Node) doFetch(cid string, targetPeerID string) error {
 		return fmt.Errorf("remote error: %s", resp.Error)
 	}
 
-	log.Printf("Incoming filesize: %d bytes", resp.Filesize)
+	emitFetchStatus(status, "Incoming filesize: %d bytes", resp.Filesize)
 
 	filename := safeDownloadFilename(resp.Filename, remoteFilename, cid)
 
@@ -110,7 +136,7 @@ func (n *Node) doFetch(cid string, targetPeerID string) error {
 	}
 
 	// Read data
-	written, err := io.Copy(outFile, io.LimitReader(s, resp.Filesize))
+	written, err := copyWithProgress(outFile, io.LimitReader(s, resp.Filesize), resp.Filesize, progress)
 	outFile.Close()
 
 	if err != nil && err != io.EOF {
@@ -148,8 +174,49 @@ func (n *Node) doFetch(cid string, targetPeerID string) error {
 	}
 	n.localFilesLock.Unlock()
 
-	log.Printf("Successfully downloaded %s as %s", cid, filepath.Base(finalPath))
+	emitFetchStatus(status, "Successfully downloaded %s as %s", cid, filepath.Base(finalPath))
 	return nil
+}
+
+func emitFetchStatus(status func(format string, args ...any), format string, args ...any) {
+	if status != nil {
+		status(format, args...)
+		return
+	}
+	log.Printf(format, args...)
+}
+
+func copyWithProgress(dst io.Writer, src io.Reader, total int64, progress func(written, total int64)) (int64, error) {
+	buf := make([]byte, 32*1024)
+	var written int64
+
+	if progress != nil {
+		progress(0, total)
+	}
+
+	for {
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			nw, ew := dst.Write(buf[:nr])
+			written += int64(nw)
+			if progress != nil {
+				progress(written, total)
+			}
+			if ew != nil {
+				return written, ew
+			}
+			if nw != nr {
+				return written, io.ErrShortWrite
+			}
+		}
+
+		if er != nil {
+			if er == io.EOF {
+				return written, nil
+			}
+			return written, er
+		}
+	}
 }
 
 func (n *Node) handleTransferStream(s network.Stream) {
@@ -211,6 +278,13 @@ func safeDownloadFilename(primaryName, fallbackName, cid string) string {
 		return name
 	}
 	return cid + ".bin"
+}
+
+func addrInfoToP2PAddr(info peer.AddrInfo) string {
+	if len(info.Addrs) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s/p2p/%s", info.Addrs[0], info.ID)
 }
 
 // make sure we don’t overwrite an existing local file.

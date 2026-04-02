@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -87,10 +88,12 @@ func NewNode(listenAddr, exportDir, rpcSocket string, bootstrapAddrs []string) (
 	// 4. Register RPC and background tasks
 	// "RPC server" is the endpoint that nodes expose
 	// to accept CLI-issued commands
-	if err := n.startRPCServer(); err != nil {
-		h.Close()
-		cancel()
-		return nil, err
+	if n.RpcSocket != "" {
+		if err := n.startRPCServer(); err != nil {
+			h.Close()
+			cancel()
+			return nil, err
+		}
 	}
 
 	// 5. Start scanning local directory periodically
@@ -226,6 +229,10 @@ func (n *Node) provideNewCIDs(files map[string]LocalFileRecord) {
 		}
 
 		if err := n.DHT.Provide(n.ctx, cidStr, true); err != nil {
+			if isDeferredProvideError(err) {
+				log.Printf("Deferring DHT provide for %s until connected to peers", cidStr)
+				continue
+			}
 			log.Printf("Failed to provide CID %s: %v", cidStr, err)
 			continue
 		}
@@ -239,4 +246,10 @@ func (n *Node) provideNewCIDs(files map[string]LocalFileRecord) {
 			delete(n.ProvidedCIDs, cidStr)
 		}
 	}
+}
+
+func isDeferredProvideError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "failed to find any peer in table") ||
+		strings.Contains(msg, "no peer in table")
 }

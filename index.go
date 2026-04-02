@@ -41,14 +41,9 @@ func (n *Node) setupIndexProtocol() {
 }
 
 func (n *Node) doList(targetAddr string) ([]IndexFile, error) {
-	maddr, err := multiaddr.NewMultiaddr(targetAddr)
+	info, err := addrInfoFromTarget(targetAddr)
 	if err != nil {
-		return nil, fmt.Errorf("invalid multiaddr: %w", err)
-	}
-
-	info, err := peer.AddrInfoFromP2pAddr(maddr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid addr info: %w", err)
+		return nil, err
 	}
 
 	ctx := context.Background()
@@ -79,6 +74,54 @@ func (n *Node) doList(targetAddr string) ([]IndexFile, error) {
 	}
 
 	return resp.Files, nil
+}
+
+func (n *Node) doHas(targetAddr string, cid string) (bool, error) {
+	info, err := addrInfoFromTarget(targetAddr)
+	if err != nil {
+		return false, err
+	}
+
+	ctx := context.Background()
+
+	if err := n.Host.Connect(ctx, *info); err != nil {
+		log.Printf("Warning: failed to connect to %s explicitly: %v", info.ID, err)
+	}
+
+	s, err := n.Host.NewStream(ctx, info.ID, indexProtocol)
+	if err != nil {
+		return false, fmt.Errorf("failed to open index stream: %w", err)
+	}
+	defer s.Close()
+
+	req := IndexRequest{Op: "HAS", CID: cid}
+	if err := json.NewEncoder(s).Encode(req); err != nil {
+		return false, fmt.Errorf("failed to send HAS request: %w", err)
+	}
+
+	var resp IndexResponse
+	if err := json.NewDecoder(s).Decode(&resp); err != nil {
+		return false, fmt.Errorf("failed to read HAS response: %w", err)
+	}
+
+	if resp.Error != "" {
+		return false, fmt.Errorf("remote error: %s", resp.Error)
+	}
+
+	return resp.Has, nil
+}
+
+func addrInfoFromTarget(targetAddr string) (*peer.AddrInfo, error) {
+	maddr, err := multiaddr.NewMultiaddr(targetAddr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid multiaddr: %w", err)
+	}
+
+	info, err := peer.AddrInfoFromP2pAddr(maddr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid addr info: %w", err)
+	}
+	return info, nil
 }
 
 func (n *Node) handleIndexStream(s network.Stream) {

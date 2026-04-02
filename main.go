@@ -37,6 +37,8 @@ func main() {
 	switch cmd {
 	case "daemon":
 		runDaemon(args)
+	case "shell":
+		runShell(args)
 	case "whohas":
 		runWhohas(args)
 	case "fetch":
@@ -54,6 +56,7 @@ func printUsage() {
 	fmt.Println("Usage: p2pfs <command> [options]")
 	fmt.Println("Commands:")
 	fmt.Println("  daemon  Run the p2pfs daemon")
+	fmt.Println("  shell   Run an interactive p2pfs shell")
 	fmt.Println("  whohas  Find who has a specific CID")
 	fmt.Println("  fetch   Download content by CID")
 	fmt.Println("  list    List files served by a peer with filenames and CIDs")

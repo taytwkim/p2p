@@ -3,6 +3,7 @@ module p2pfs
 go 1.25.7
 
 require (
+	github.com/chzyer/readline v1.5.1
 	github.com/ipfs/go-cid v0.5.0
 	github.com/libp2p/go-libp2p v0.47.0
 	github.com/libp2p/go-libp2p-kad-dht v0.35.1
