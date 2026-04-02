@@ -1,6 +1,6 @@
 module p2pfs
 
-go 1.25.7
+go 1.25
 
 require (
 	github.com/chzyer/readline v1.5.1

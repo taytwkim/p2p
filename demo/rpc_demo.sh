@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# demo.sh - A script to set up, run, and clean the P2P file sharing demo.
+# rpc_demo.sh - A script to set up, run, and clean the P2P file sharing demo using daemon + RPC commands.
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -63,7 +63,7 @@ case "$1" in
         setup
         ;;
     *)
-        echo "Usage: ./demo.sh {start|clean|setup}"
+        echo "Usage: ./rpc_demo.sh {start|clean|setup}"
         echo "  start : Cleans up old state, builds, and starts the 3-peer network"
         echo "  clean : Kills running peers and removes export directories / logs"
         exit 1
