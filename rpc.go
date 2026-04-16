@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -39,6 +40,7 @@ type FetchArgs struct {
 
 type FetchReply struct {
 	Success bool
+	Events  []string
 }
 
 type ListArgs struct {
@@ -81,10 +83,11 @@ func (c *Client) Whohas(cid string) ([]ProviderInfo, error) {
 	return reply.Providers, err
 }
 
-func (c *Client) Fetch(cid, peerID string) error {
+func (c *Client) Fetch(cid, peerID string) (FetchReply, error) {
 	args := &FetchArgs{CID: cid, PeerID: peerID}
 	var reply FetchReply
-	return c.rpcClient.Call("P2PFSAPI.Fetch", args, &reply)
+	err := c.rpcClient.Call("P2PFSAPI.Fetch", args, &reply)
+	return reply, err
 }
 
 func (c *Client) List(targetAddr string) ([]IndexFile, error) {
@@ -119,7 +122,10 @@ func (api *P2PFSAPI) Whohas(args *WhohasArgs, reply *WhohasReply) error {
 }
 
 func (api *P2PFSAPI) Fetch(args *FetchArgs, reply *FetchReply) error {
-	err := api.node.doFetch(args.CID, args.PeerID)
+	status := func(format string, args ...any) {
+		reply.Events = append(reply.Events, fmt.Sprintf(format, args...))
+	}
+	err := api.node.doFetchWithProgress(args.CID, args.PeerID, nil, status)
 	if err == nil {
 		reply.Success = true
 	}

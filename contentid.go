@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"os"
 
 	"github.com/ipfs/go-cid"
@@ -15,7 +17,15 @@ func ComputeCID(path string) (string, error) {
 	}
 	defer file.Close()
 
-	hash, err := mh.SumStream(file, mh.SHA2_256, -1)
+	return ComputeCIDFromReader(file)
+}
+
+func ComputeCIDFromBytes(data []byte) (string, error) {
+	return ComputeCIDFromReader(bytes.NewReader(data))
+}
+
+func ComputeCIDFromReader(r io.Reader) (string, error) {
+	hash, err := mh.SumStream(r, mh.SHA2_256, -1)
 	if err != nil {
 		return "", err
 	}

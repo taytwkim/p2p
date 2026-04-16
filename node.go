@@ -18,11 +18,26 @@ import (
 )
 
 type LocalFileRecord struct {
-	CID      string
-	Filename string
-	Path     string
-	Size     int64
+	CID         string
+	Kind        LocalObjectKind
+	Filename    string
+	Path        string
+	Size        int64
+	Offset      int64
+	Length      int64
+	ManifestCID string
+	FileCID     string
+	ChunkCount  int
+	Manifest    *Manifest
 }
+
+type LocalObjectKind string
+
+const (
+	ObjectFile     LocalObjectKind = "file"
+	ObjectManifest LocalObjectKind = "manifest"
+	ObjectChunk    LocalObjectKind = "chunk"
+)
 
 // Node represents the local p2pfs daemon
 type Node struct {
@@ -179,6 +194,11 @@ func (n *Node) scanLocalFiles() {
 }
 
 func (n *Node) updateLocalFiles() {
+	if err := ensureP2PFSDirs(n.ExportDir); err != nil {
+		log.Printf("Error creating internal storage dirs: %v", err)
+		return
+	}
+
 	files, err := os.ReadDir(n.ExportDir)
 	if err != nil {
 		log.Printf("Error reading export dir: %v", err)
@@ -187,7 +207,7 @@ func (n *Node) updateLocalFiles() {
 
 	newFiles := make(map[string]LocalFileRecord)
 	for _, f := range files {
-		if f.IsDir() {
+		if f.IsDir() || f.Name() == ".p2pfs" || strings.HasSuffix(f.Name(), ".downloading") {
 			continue
 		}
 		info, err := f.Info()
@@ -202,11 +222,54 @@ func (n *Node) updateLocalFiles() {
 			continue
 		}
 
+		manifest, manifestBytes, manifestCID, err := BuildManifest(path, f.Name(), defaultChunkSize)
+		if err != nil {
+			log.Printf("Error building manifest for %s: %v", f.Name(), err)
+			continue
+		}
+		manifestPath := manifestStoragePath(n.ExportDir, manifestCID)
+		if err := os.WriteFile(manifestPath, manifestBytes, 0644); err != nil {
+			log.Printf("Error writing manifest for %s: %v", f.Name(), err)
+			continue
+		}
+
+		newFiles[manifestCID] = LocalFileRecord{
+			CID:         manifestCID,
+			Kind:        ObjectManifest,
+			Filename:    f.Name(),
+			Path:        manifestPath,
+			Size:        int64(len(manifestBytes)),
+			ManifestCID: manifestCID,
+			FileCID:     cid,
+			ChunkCount:  len(manifest.Chunks),
+			Manifest:    manifest,
+		}
+
 		newFiles[cid] = LocalFileRecord{
-			CID:      cid,
-			Filename: f.Name(),
-			Path:     path,
-			Size:     info.Size(),
+			CID:         cid,
+			Kind:        ObjectFile,
+			Filename:    f.Name(),
+			Path:        path,
+			Size:        info.Size(),
+			Length:      info.Size(),
+			ManifestCID: manifestCID,
+			FileCID:     cid,
+			ChunkCount:  len(manifest.Chunks),
+			Manifest:    manifest,
+		}
+
+		for _, chunk := range manifest.Chunks {
+			newFiles[chunk.CID] = LocalFileRecord{
+				CID:         chunk.CID,
+				Kind:        ObjectChunk,
+				Filename:    fmt.Sprintf("%s.chunk-%d", f.Name(), chunk.Index),
+				Path:        path,
+				Size:        chunk.Size,
+				Offset:      chunk.Offset,
+				Length:      chunk.Size,
+				ManifestCID: manifestCID,
+				FileCID:     cid,
+			}
 		}
 	}
 
@@ -215,6 +278,21 @@ func (n *Node) updateLocalFiles() {
 	n.localFilesLock.Unlock()
 
 	n.provideNewCIDs(newFiles)
+}
+
+func ensureP2PFSDirs(exportDir string) error {
+	if err := os.MkdirAll(filepath.Join(exportDir, ".p2pfs", "manifests"), 0755); err != nil {
+		return err
+	}
+	return os.MkdirAll(filepath.Join(exportDir, ".p2pfs", "chunks"), 0755)
+}
+
+func manifestStoragePath(exportDir, manifestCID string) string {
+	return filepath.Join(exportDir, ".p2pfs", "manifests", manifestCID+".json")
+}
+
+func chunkStoragePath(exportDir, chunkCID string) string {
+	return filepath.Join(exportDir, ".p2pfs", "chunks", chunkCID)
 }
 
 func (n *Node) provideNewCIDs(files map[string]LocalFileRecord) {

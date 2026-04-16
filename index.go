@@ -25,9 +25,13 @@ type IndexRequest struct {
 }
 
 type IndexFile struct {
-	CID      string `json:"cid"`
-	Filename string `json:"filename"`
-	Size     int64  `json:"size"`
+	CID         string `json:"cid"`
+	Kind        string `json:"kind,omitempty"`
+	Filename    string `json:"filename"`
+	Size        int64  `json:"size"`
+	ManifestCID string `json:"manifestCid,omitempty"`
+	FileCID     string `json:"fileCid,omitempty"`
+	ChunkCount  int    `json:"chunkCount,omitempty"`
 }
 
 type IndexResponse struct {
@@ -142,10 +146,17 @@ func (n *Node) handleIndexStream(s network.Stream) {
 		n.localFilesLock.RLock()
 		var files []IndexFile
 		for _, f := range n.LocalFiles {
+			if f.Kind != ObjectManifest {
+				continue
+			}
 			files = append(files, IndexFile{
-				CID:      f.CID,
-				Filename: f.Filename,
-				Size:     f.Size,
+				CID:         f.CID,
+				Kind:        string(f.Kind),
+				Filename:    f.Filename,
+				Size:        f.Manifest.FileSize,
+				ManifestCID: f.ManifestCID,
+				FileCID:     f.FileCID,
+				ChunkCount:  f.ChunkCount,
 			})
 		}
 		n.localFilesLock.RUnlock()

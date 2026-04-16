@@ -1,8 +1,8 @@
 package main
 
 import (
-	"crypto/rand"
 	"context"
+	"crypto/rand"
 	"flag"
 	"fmt"
 	"io"
@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chzyer/readline"
@@ -152,6 +152,9 @@ func (s *shellSession) runCommand(line string) error {
 		s.node.localFilesLock.RLock()
 		files := make([]LocalFileRecord, 0, len(s.node.LocalFiles))
 		for _, f := range s.node.LocalFiles {
+			if f.Kind != ObjectManifest {
+				continue
+			}
 			files = append(files, f)
 		}
 		s.node.localFilesLock.RUnlock()
@@ -167,7 +170,15 @@ func (s *shellSession) runCommand(line string) error {
 
 		fmt.Println("Local files:")
 		for _, f := range files {
-			fmt.Printf("  %s  %s  %d bytes\n", f.Filename, f.CID, f.Size)
+			fileSize := f.Size
+			if f.Manifest != nil {
+				fileSize = f.Manifest.FileSize
+			}
+			fmt.Printf("  %s\n", f.Filename)
+			fmt.Printf("    manifest: %s\n", f.CID)
+			fmt.Printf("    file:     %s\n", f.FileCID)
+			fmt.Printf("    size:     %d bytes\n", fileSize)
+			fmt.Printf("    chunks:   %d\n", f.ChunkCount)
 		}
 	case "whohas":
 		if len(args) != 2 {
@@ -213,7 +224,11 @@ func (s *shellSession) runCommand(line string) error {
 		}
 		fmt.Println("Remote files:")
 		for _, f := range files {
-			fmt.Printf("  %s  %s  %d bytes\n", f.Filename, f.CID, f.Size)
+			fmt.Printf("  %s\n", f.Filename)
+			fmt.Printf("    manifest: %s\n", f.ManifestCID)
+			fmt.Printf("    file:     %s\n", f.FileCID)
+			fmt.Printf("    size:     %d bytes\n", f.Size)
+			fmt.Printf("    chunks:   %d\n", f.ChunkCount)
 		}
 	case "alias":
 		if len(args) != 3 {

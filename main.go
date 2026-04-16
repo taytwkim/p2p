@@ -163,7 +163,10 @@ func runFetch(args []string) {
 	client := NewClient(*rpcOpt)
 
 	startTime := time.Now()
-	err := client.Fetch(cid, *fromPeer)
+	reply, err := client.Fetch(cid, *fromPeer)
+	for _, event := range reply.Events {
+		fmt.Printf("  %s\n", event)
+	}
 	if err != nil {
 		log.Fatalf("Fetch failed: %v", err)
 	}
@@ -190,6 +193,10 @@ func runList(args []string) {
 	}
 	fmt.Println("Files served:")
 	for _, f := range files {
-		fmt.Printf("  - %s  %s  %d bytes\n", f.Filename, f.CID, f.Size)
+		fmt.Printf("  - %s\n", f.Filename)
+		fmt.Printf("      manifest: %s\n", f.ManifestCID)
+		fmt.Printf("      file:     %s\n", f.FileCID)
+		fmt.Printf("      size:     %d bytes\n", f.Size)
+		fmt.Printf("      chunks:   %d\n", f.ChunkCount)
 	}
 }
