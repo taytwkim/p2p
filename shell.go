@@ -13,12 +13,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/chzyer/readline"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 )
+
+// This file implements an interactive shell used to control a p2p daemon
+// To start a node in interactive mode, run ./p2pfs shell ... instead of ./p2pfs daemon ...
 
 const (
 	colorReset  = "\033[0m"
@@ -149,15 +151,15 @@ func (s *shellSession) runCommand(line string) error {
 			fmt.Printf("  %s/p2p/%s\n", addr, s.node.Host.ID())
 		}
 	case "files":
-		s.node.localFilesLock.RLock()
-		files := make([]LocalFileRecord, 0, len(s.node.LocalFiles))
-		for _, f := range s.node.LocalFiles {
+		s.node.localObjectsLock.RLock()
+		files := make([]LocalObjectRecord, 0, len(s.node.LocalObjects))
+		for _, f := range s.node.LocalObjects {
 			if f.Kind != ObjectManifest {
 				continue
 			}
 			files = append(files, f)
 		}
-		s.node.localFilesLock.RUnlock()
+		s.node.localObjectsLock.RUnlock()
 
 		sort.Slice(files, func(i, j int) bool {
 			return files[i].Filename < files[j].Filename
@@ -176,7 +178,6 @@ func (s *shellSession) runCommand(line string) error {
 			}
 			fmt.Printf("  %s\n", f.Filename)
 			fmt.Printf("    manifest: %s\n", f.CID)
-			fmt.Printf("    file:     %s\n", f.FileCID)
 			fmt.Printf("    size:     %d bytes\n", fileSize)
 			fmt.Printf("    chunks:   %d\n", f.ChunkCount)
 		}
@@ -198,7 +199,7 @@ func (s *shellSession) runCommand(line string) error {
 		}
 	case "fetch":
 		if len(args) < 2 || len(args) > 3 {
-			return fmt.Errorf("usage: fetch <cid> [peer_id_or_alias]")
+			return fmt.Errorf("usage: fetch <manifest-cid> [peer_id_or_alias]")
 		}
 		peerID := ""
 		if len(args) == 3 {
@@ -226,7 +227,6 @@ func (s *shellSession) runCommand(line string) error {
 		for _, f := range files {
 			fmt.Printf("  %s\n", f.Filename)
 			fmt.Printf("    manifest: %s\n", f.ManifestCID)
-			fmt.Printf("    file:     %s\n", f.FileCID)
 			fmt.Printf("    size:     %d bytes\n", f.Size)
 			fmt.Printf("    chunks:   %d\n", f.ChunkCount)
 		}
@@ -263,7 +263,7 @@ func (s *shellSession) runCommand(line string) error {
 		fmt.Fprint(s.rl.Stdout(), "\033[H\033[2J")
 		s.rl.Refresh()
 	case "rescan":
-		s.node.updateLocalFiles()
+		s.node.updateLocalObjects()
 		s.printInfo("Rescanned %s", s.node.ExportDir)
 	case "exit", "quit":
 		os.Exit(0)
@@ -329,44 +329,10 @@ func (s *shellSession) printError(format string, args ...any) {
 }
 
 func (s *shellSession) runFetch(cid, peerID string) error {
-	lastRender := time.Time{}
-	progressActive := false
-	progress := func(written, total int64) {
-		now := time.Now()
-		if total > 0 && written < total && !lastRender.IsZero() && now.Sub(lastRender) < 100*time.Millisecond {
-			return
-		}
-		lastRender = now
-		progressActive = true
-
-		const width = 24
-		percent := 1.0
-		if total > 0 {
-			percent = float64(written) / float64(total)
-		}
-		if percent < 0 {
-			percent = 0
-		}
-		if percent > 1 {
-			percent = 1
-		}
-		filled := int(percent * width)
-		bar := strings.Repeat("#", filled) + strings.Repeat("-", width-filled)
-		fmt.Fprintf(s.rl.Stdout(), "\r%sDownloading [%s] %3.0f%% (%d/%d bytes)%s", colorInfo, bar, percent*100, written, total, colorReset)
-	}
-
 	status := func(format string, args ...any) {
-		if progressActive {
-			fmt.Fprintln(s.rl.Stdout())
-			progressActive = false
-		}
 		fmt.Fprintf(s.rl.Stdout(), colorInfo+format+colorReset+"\n", args...)
 	}
-	err := s.node.doFetchWithProgress(cid, peerID, progress, status)
-	if progressActive {
-		fmt.Fprintln(s.rl.Stdout())
-	}
-	return err
+	return s.node.doFetchWithStatus(cid, peerID, status)
 }
 
 func (s *shellSession) runLogCommand(args []string) error {
@@ -432,7 +398,7 @@ func (s *shellSession) runEchoCommand(line string) error {
 		return err
 	}
 
-	s.node.updateLocalFiles()
+	s.node.updateLocalObjects()
 	s.printInfo("Wrote %s", filename)
 	return nil
 }
@@ -475,7 +441,7 @@ func (s *shellSession) runDumpCommand(line string) error {
 		return err
 	}
 
-	s.node.updateLocalFiles()
+	s.node.updateLocalObjects()
 	s.printInfo("Wrote %d bytes to %s", size, filename)
 	return nil
 }
@@ -529,7 +495,7 @@ func printShellHelp() {
 	fmt.Println("  id                           Show peer ID and listen addresses")
 	fmt.Println("  files                        Show local files discovered in export_dir")
 	fmt.Println("  whohas <cid>                 Query the DHT for providers of a CID")
-	fmt.Println("  fetch <cid> [peer|alias]     Fetch a CID, optionally from a specific peer")
+	fmt.Println("  fetch <manifest-cid> [peer|alias] Fetch a file by manifest CID")
 	fmt.Println("  list <multiaddr|alias>       List the files served by a remote peer")
 	fmt.Println("  alias <name> <target>        Save a short alias for a peer ID or multiaddr")
 	fmt.Println("  aliases                      Show configured aliases")

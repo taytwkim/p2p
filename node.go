@@ -17,41 +17,41 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
-type LocalFileRecord struct {
-	CID         string
-	Kind        LocalObjectKind
-	Filename    string
+// LocalObjectRecord describes one CID-addressed object this node can serve.
+// User-visible files are exposed as a manifest plus one object per chunk.
+type LocalObjectRecord struct {
+	CID         string          // The CID for this object.
+	Kind        LocalObjectKind // Whether this record is a manifest or chunk.
+	Filename    string          // Human-friendly name.
 	Path        string
 	Size        int64
-	Offset      int64
-	Length      int64
-	ManifestCID string
-	FileCID     string
-	ChunkCount  int
-	Manifest    *Manifest
+	Offset      int64     // For chunks served from a larger file, where the chunk starts.
+	Length      int64     // For chunks, how many bytes to serve.
+	ManifestCID string    // The manifest CID for the file this object belongs to.
+	ChunkCount  int       // Number of chunks in the file.
+	Manifest    *Manifest // Parsed manifest object, useful for manifest records.
 }
 
 type LocalObjectKind string
 
 const (
-	ObjectFile     LocalObjectKind = "file"
 	ObjectManifest LocalObjectKind = "manifest"
 	ObjectChunk    LocalObjectKind = "chunk"
 )
 
-// Node represents the local p2pfs daemon
+// Node is a local p2p daemon
 type Node struct {
-	ctx            context.Context // ctx and cancel are used to manage the lifecycle of daemons.
-	cancel         context.CancelFunc
-	Host           host.Host                  // core engine provided by libp2p, representing your presence on the network.
-	ExportDir      string                     // local path to the folder where shared files live.
-	RpcSocket      string                     // path to the local Unix Domain Socket used for CLI commands.
-	LocalFiles     map[string]LocalFileRecord // cache of local files, keyed by CID so content is the identity.
-	localFilesLock sync.RWMutex               // prevents race conditions when accessing the LocalFiles map.
-	DHT            DHTNode                    // Kademlia DHT used for provider registration and lookup.
-	ProvidedCIDs   map[string]struct{}        // local CIDs already announced into the DHT (we don't want to announce again).
-	providedLock   sync.Mutex
-	rpcListener    net.Listener // rpcListener holds the open Unix Domain Socket listener for CLI clients.
+	ctx              context.Context // ctx and cancel are used to manage the lifecycle of daemons.
+	cancel           context.CancelFunc
+	Host             host.Host                    // core engine provided by libp2p, representing your presence on the network.
+	ExportDir        string                       // local path to the folder where shared files live.
+	RpcSocket        string                       // path to the local Unix Domain Socket used for CLI commands.
+	LocalObjects     map[string]LocalObjectRecord // local objects keyed by CID, so content is the identity.
+	localObjectsLock sync.RWMutex                 // prevents race conditions when accessing the LocalObjects map.
+	DHT              DHTNode                      // Kademlia DHT used for provider registration and lookup.
+	ProvidedCIDs     map[string]struct{}          // local CIDs already announced into the DHT (we don't want to announce again).
+	providedLock     sync.Mutex
+	rpcListener      net.Listener // rpcListener holds the open Unix Domain Socket listener for CLI clients.
 }
 
 // NewNode initializes a new libp2p node, connects to bootstrap nodes, and starts background tasks
@@ -73,7 +73,7 @@ func NewNode(listenAddr, exportDir, rpcSocket string, bootstrapAddrs []string) (
 		Host:         h,
 		ExportDir:    exportDir,
 		RpcSocket:    rpcSocket,
-		LocalFiles:   make(map[string]LocalFileRecord),
+		LocalObjects: make(map[string]LocalObjectRecord),
 		ProvidedCIDs: make(map[string]struct{}),
 	}
 
@@ -112,7 +112,7 @@ func NewNode(listenAddr, exportDir, rpcSocket string, bootstrapAddrs []string) (
 	}
 
 	// 5. Start scanning local directory periodically
-	go n.scanLocalFiles()
+	go n.scanLocalObjects()
 
 	// 6. Register protocols
 	n.setupTransferProtocol()
@@ -142,7 +142,7 @@ func (n *Node) connectBootstrappers(addrs []string) {
 			continue
 		}
 
-		// take IP and convert to protocol-agnostic multiaddr format
+		// take IP and convert to protocol-agnostic multiaddr
 		maddr, err := multiaddr.NewMultiaddr(addrStr)
 		if err != nil {
 			log.Printf("Invalid bootstrap address %s: %v", addrStr, err)
@@ -174,26 +174,26 @@ func (n *Node) connectBootstrappers(addrs []string) {
 	wg.Wait()
 }
 
-// Wrapper to call updateLocalFiles periodically
-func (n *Node) scanLocalFiles() {
+// Wrapper to call updateLocalObjects periodically
+func (n *Node) scanLocalObjects() {
 	// We poll because we want to check whether the user has uploaded a new file in export_dir
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	// Run once immediately
-	n.updateLocalFiles()
+	n.updateLocalObjects()
 
 	for {
 		select {
 		case <-n.ctx.Done():
 			return
 		case <-ticker.C:
-			n.updateLocalFiles()
+			n.updateLocalObjects()
 		}
 	}
 }
 
-func (n *Node) updateLocalFiles() {
+func (n *Node) updateLocalObjects() {
 	if err := ensureP2PFSDirs(n.ExportDir); err != nil {
 		log.Printf("Error creating internal storage dirs: %v", err)
 		return
@@ -205,22 +205,12 @@ func (n *Node) updateLocalFiles() {
 		return
 	}
 
-	newFiles := make(map[string]LocalFileRecord)
+	newObjects := make(map[string]LocalObjectRecord)
 	for _, f := range files {
 		if f.IsDir() || f.Name() == ".p2pfs" || strings.HasSuffix(f.Name(), ".downloading") {
 			continue
 		}
-		info, err := f.Info()
-		if err != nil {
-			continue
-		}
-
 		path := filepath.Join(n.ExportDir, f.Name())
-		cid, err := ComputeCID(path)
-		if err != nil {
-			log.Printf("Error computing CID for %s: %v", f.Name(), err)
-			continue
-		}
 
 		manifest, manifestBytes, manifestCID, err := BuildManifest(path, f.Name(), defaultChunkSize)
 		if err != nil {
@@ -233,33 +223,19 @@ func (n *Node) updateLocalFiles() {
 			continue
 		}
 
-		newFiles[manifestCID] = LocalFileRecord{
+		newObjects[manifestCID] = LocalObjectRecord{
 			CID:         manifestCID,
 			Kind:        ObjectManifest,
 			Filename:    f.Name(),
 			Path:        manifestPath,
 			Size:        int64(len(manifestBytes)),
 			ManifestCID: manifestCID,
-			FileCID:     cid,
-			ChunkCount:  len(manifest.Chunks),
-			Manifest:    manifest,
-		}
-
-		newFiles[cid] = LocalFileRecord{
-			CID:         cid,
-			Kind:        ObjectFile,
-			Filename:    f.Name(),
-			Path:        path,
-			Size:        info.Size(),
-			Length:      info.Size(),
-			ManifestCID: manifestCID,
-			FileCID:     cid,
 			ChunkCount:  len(manifest.Chunks),
 			Manifest:    manifest,
 		}
 
 		for _, chunk := range manifest.Chunks {
-			newFiles[chunk.CID] = LocalFileRecord{
+			newObjects[chunk.CID] = LocalObjectRecord{
 				CID:         chunk.CID,
 				Kind:        ObjectChunk,
 				Filename:    fmt.Sprintf("%s.chunk-%d", f.Name(), chunk.Index),
@@ -268,18 +244,18 @@ func (n *Node) updateLocalFiles() {
 				Offset:      chunk.Offset,
 				Length:      chunk.Size,
 				ManifestCID: manifestCID,
-				FileCID:     cid,
 			}
 		}
 	}
 
-	n.localFilesLock.Lock()
-	n.LocalFiles = newFiles
-	n.localFilesLock.Unlock()
+	n.localObjectsLock.Lock()
+	n.LocalObjects = newObjects
+	n.localObjectsLock.Unlock()
 
-	n.provideNewCIDs(newFiles)
+	n.provideNewObjectCIDs(newObjects)
 }
 
+// helper that creates .p2pfs/manifests and .p2pfs/chunks
 func ensureP2PFSDirs(exportDir string) error {
 	if err := os.MkdirAll(filepath.Join(exportDir, ".p2pfs", "manifests"), 0755); err != nil {
 		return err
@@ -287,20 +263,23 @@ func ensureP2PFSDirs(exportDir string) error {
 	return os.MkdirAll(filepath.Join(exportDir, ".p2pfs", "chunks"), 0755)
 }
 
+// helper that returns where a manifest JSON file should be stored.
 func manifestStoragePath(exportDir, manifestCID string) string {
 	return filepath.Join(exportDir, ".p2pfs", "manifests", manifestCID+".json")
 }
 
+// returns where a downloaded chunk should be cached.
 func chunkStoragePath(exportDir, chunkCID string) string {
 	return filepath.Join(exportDir, ".p2pfs", "chunks", chunkCID)
 }
 
-func (n *Node) provideNewCIDs(files map[string]LocalFileRecord) {
+// announces manifest and chunk CIDs to the DHT.
+func (n *Node) provideNewObjectCIDs(objects map[string]LocalObjectRecord) {
 	n.providedLock.Lock()
 	defer n.providedLock.Unlock()
 
-	current := make(map[string]struct{}, len(files))
-	for cidStr := range files {
+	current := make(map[string]struct{}, len(objects))
+	for cidStr := range objects {
 		current[cidStr] = struct{}{}
 		if _, alreadyProvided := n.ProvidedCIDs[cidStr]; alreadyProvided {
 			continue
@@ -326,6 +305,7 @@ func (n *Node) provideNewCIDs(files map[string]LocalFileRecord) {
 	}
 }
 
+// detects and ignores harmless early DHT errors when no peers are connected yet.
 func isDeferredProvideError(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "failed to find any peer in table") ||

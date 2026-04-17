@@ -10,16 +10,14 @@ import (
 )
 
 /*
- * runDaemon starts the local node as a daemon.
+ * Main driver that dispatches runX
  *
- * runWhohas, runFetch, and runList are CLI commands we use to issue requests to the
- * local daemon over RPC.
+ * 	- runDaemon starts a p2p node as a daemon.
+ *	- runWhohas, runFetch, and runList are CLI commands we use to control local daemon over RPC.
+ * 		The daemon calls do_X(...) to send requests to another peer,
+ *		and the other peer responds by calling handle_X(...).
  *
- * The daemon then decides what action to take.
- * If needed, it uses do_X(...) functions to contact another peer,
- * and that peer handles the request in handle_X(...).
- *
- * Example flow:
+ * Example:
  * 		1. We issue runFetch on CLI
  * 		2. local daemon receives runFetch and calls doFetch (see rpc.go and transfer.go)
  * 		3. remote peer receives doFetch which is handled by handleTransferStream (see transfer.go)
@@ -110,9 +108,9 @@ func runDaemon(args []string) {
 // the node.
 //
 // See rpc.go, which defines both:
-// 1. the CLI-side RPC functions that issue commands, and
-// 2. the daemon-side handlers that receive those commands and call functions
-//    like doList and doFetch.
+// 		1. the CLI-side RPC functions that issue commands, and
+// 		2. the daemon-side handlers that receive those commands and call functions
+//    		like doList and doFetch.
 // ============================================================================
 
 // node X broadcasts whohas
@@ -154,12 +152,12 @@ func runFetch(args []string) {
 	fs.Parse(args)
 
 	if fs.NArg() < 1 {
-		fmt.Println("Usage: p2pfs fetch <cid> [--from <peer_id>]")
+		fmt.Println("Usage: p2pfs fetch <manifest-cid> [--from <peer_id>]")
 		os.Exit(1)
 	}
 	cid := fs.Arg(0)
 
-	log.Printf("Fetching CID: %s", cid)
+	log.Printf("Fetching manifest CID: %s", cid)
 	client := NewClient(*rpcOpt)
 
 	startTime := time.Now()
@@ -195,7 +193,6 @@ func runList(args []string) {
 	for _, f := range files {
 		fmt.Printf("  - %s\n", f.Filename)
 		fmt.Printf("      manifest: %s\n", f.ManifestCID)
-		fmt.Printf("      file:     %s\n", f.FileCID)
 		fmt.Printf("      size:     %d bytes\n", f.Size)
 		fmt.Printf("      chunks:   %d\n", f.ChunkCount)
 	}

@@ -10,6 +10,20 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
+/*
+ * This file contains small unit tests for the manifest-related features
+ *
+ * 1. TestBuildManifestForReadableChunks
+ * 		Tests manifest built from a file
+ *
+ * 2. TestUpdateLocalObjectsIndexesManifestAndChunks
+ * 		Tests how a node scans its local directory and build manifests from new files
+ *
+ * 3. TestFinishChunkedFetchReconstructsFromCachedChunks
+ *		Tests reconstructing the original file from the downloaded and cached chunks
+ */
+
+// dummy DHT and DHT operations used for testing
 type fakeDHT struct{}
 
 func (fakeDHT) Bootstrap(context.Context) error             { return nil }
@@ -19,14 +33,17 @@ func (fakeDHT) FindProviders(context.Context, string, int) ([]peer.AddrInfo, err
 }
 func (fakeDHT) Close() error { return nil }
 
+// Create a small test file with exactly 15 bytes "AAAA\nBBBB\nCCCC\n".
+// Check that the manifest splits it into three chunks and generate expected CIDs
 func TestBuildManifestForReadableChunks(t *testing.T) {
-	dir := t.TempDir()
+	dir := t.TempDir() // Create a temporary folder for this test.
 	path := filepath.Join(dir, "letters.txt")
-	content := []byte("AAAA\nBBBB\nCCCC\n")
+	content := []byte("AAAA\nBBBB\nCCCC\n") // Create a test file containing exactly 15 bytes
 	if err := os.WriteFile(path, content, 0644); err != nil {
 		t.Fatal(err)
 	}
 
+	// Build a manifest with chunk size 5, each line should be a chunk
 	manifest, manifestBytes, manifestCID, err := BuildManifest(path, "letters.txt", 5)
 	if err != nil {
 		t.Fatal(err)
@@ -70,29 +87,10 @@ func TestBuildManifestForReadableChunks(t *testing.T) {
 	}
 }
 
-func TestBuildManifestDemoChunksCID(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "chunks.txt")
-	content := []byte("AAAA\nBBBB\nCCCC\n")
-	if err := os.WriteFile(path, content, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	_, manifestBytes, manifestCID, err := BuildManifest(path, "chunks.txt", 5)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	computedManifestCID, err := ComputeCIDFromBytes(manifestBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if manifestCID != computedManifestCID {
-		t.Fatalf("manifest CID = %s, but bytes hash to %s", manifestCID, computedManifestCID)
-	}
-}
-
-func TestUpdateLocalFilesIndexesManifestFileAndChunks(t *testing.T) {
+// Create a small test file with exactly 15 bytes "AAAA\nBBBB\nCCCC\n".
+// Start a test node and confirm that it correctly scans the local directory
+// and creates an expected manifest.
+func TestUpdateLocalObjectsIndexesManifestAndChunks(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "letters.txt")
 	if err := os.WriteFile(path, []byte("AAAA\nBBBB\nCCCC\n"), 0644); err != nil {
@@ -105,15 +103,15 @@ func TestUpdateLocalFilesIndexesManifestFileAndChunks(t *testing.T) {
 		ctx:          ctx,
 		cancel:       cancel,
 		ExportDir:    dir,
-		LocalFiles:   make(map[string]LocalFileRecord),
+		LocalObjects: make(map[string]LocalObjectRecord),
 		ProvidedCIDs: make(map[string]struct{}),
 		DHT:          fakeDHT{},
 	}
 
-	node.updateLocalFiles()
+	node.updateLocalObjects()
 
-	var manifests, files, chunks int
-	for _, record := range node.LocalFiles {
+	var manifests, chunks int
+	for _, record := range node.LocalObjects {
 		switch record.Kind {
 		case ObjectManifest:
 			manifests++
@@ -123,19 +121,19 @@ func TestUpdateLocalFilesIndexesManifestFileAndChunks(t *testing.T) {
 			if _, err := os.Stat(record.Path); err != nil {
 				t.Fatalf("manifest was not written: %v", err)
 			}
-		case ObjectFile:
-			files++
 		case ObjectChunk:
 			chunks++
 		}
 	}
 
-	if manifests != 1 || files != 1 || chunks != 3 {
-		t.Fatalf("records: manifests=%d files=%d chunks=%d, want 1/1/3", manifests, files, chunks)
+	if manifests != 1 || chunks != 3 {
+		t.Fatalf("records: manifests=%d chunks=%d, want 1/3", manifests, chunks)
 	}
 }
 
+// Tests reconstructing the original file from the downloaded and cached chunks
 func TestFinishChunkedFetchReconstructsFromCachedChunks(t *testing.T) {
+	// Create a source file
 	sourceDir := t.TempDir()
 	sourcePath := filepath.Join(sourceDir, "letters.txt")
 	content := []byte("AAAA\nBBBB\nCCCC\n")
@@ -143,15 +141,19 @@ func TestFinishChunkedFetchReconstructsFromCachedChunks(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Build a manifest
 	manifest, manifestBytes, manifestCID, err := BuildManifest(sourcePath, "letters.txt", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
 
+	// Create a destination directory where the “downloading peer” lives
 	destDir := t.TempDir()
 	if err := ensureP2PFSDirs(destDir); err != nil {
 		t.Fatal(err)
 	}
+
+	// Manually write the chunk files into the cache, pretend that the network fetch already downloaded each chunk.
 	for _, chunk := range manifest.Chunks {
 		start := chunk.Offset
 		end := start + chunk.Size
@@ -166,12 +168,15 @@ func TestFinishChunkedFetchReconstructsFromCachedChunks(t *testing.T) {
 		ctx:          ctx,
 		cancel:       cancel,
 		ExportDir:    destDir,
-		LocalFiles:   make(map[string]LocalFileRecord),
+		LocalObjects: make(map[string]LocalObjectRecord),
 		ProvidedCIDs: make(map[string]struct{}),
 		DHT:          fakeDHT{},
 	}
 
+	// Creates the fake transfer response header that would normally come from a remote peer when downloading a manifest
 	resp := TransferResponse{Kind: string(ObjectManifest), Filesize: int64(len(manifestBytes)), Filename: "letters.txt"}
+
+	// Reconstruct the file
 	if err := node.finishChunkedFetch(bytes.NewReader(manifestBytes), manifestCID, resp, "", nil); err != nil {
 		t.Fatal(err)
 	}

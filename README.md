@@ -10,9 +10,9 @@ The network operates on two primary protocols:
 
 - **Index Protocol (`/p2pfs/index/1.0.0`)**: Stream-based request protocol allowing peers to manually verify what files a target peer is serving.
 
-It uses `libp2p`'s **Kademlia DHT** for content routing. Each file is identified by a CID derived from its content (raw bytes). 
+It uses `libp2p`'s **Kademlia DHT** for content routing. Downloadable files are identified by manifest CIDs, and every chunk is identified by a CID derived from its raw bytes.
 
-Nodes periodically scan their local export directory and register themselves as providers for newly discovered manifests, full files, and chunks, letting other peers locate content on demand.
+Nodes periodically scan their local export directory and register themselves as providers for newly discovered manifests and chunks, letting other peers locate content on demand.
 
 ## Chunked Files
 
@@ -22,7 +22,7 @@ Each user-visible file is represented by:
 - one or more **chunk CIDs**, computed from fixed-size byte ranges
 - a **manifest CID**, computed from a JSON manifest that names the file and lists its chunks in order
 
-The manifest CID is the main CID to share and fetch. Fetching a manifest downloads the manifest JSON, downloads its chunks in parallel, verifies each chunk, reconstructs the file, and verifies the final file CID.
+The manifest CID is the CID to share and fetch. Fetching a manifest downloads the manifest JSON, downloads its chunks in parallel, verifies each chunk, reconstructs the file, and verifies the final file CID stored inside the manifest.
 
 For the current demo-friendly implementation, the chunk size is intentionally small: 5 bytes. A file containing:
 
@@ -68,7 +68,7 @@ To join an existing network, add `--bootstrap`:
 - `id`: Show this node's peer ID and listen addresses.
 - `files`: Show local files discovered in `export_dir`.
 - `whohas <cid>`: Query the DHT for peers that provide a CID.
-- `fetch <cid> [peer|alias]`: Download a CID, optionally from a specific peer. Use the manifest CID for chunked downloads.
+- `fetch <manifest-cid> [peer|alias]`: Download a file by manifest CID, optionally from a specific peer.
 - `list <multiaddr|alias>`: Ask a specific peer for the files it is serving.
 - `alias <name> <target>`: Save a short alias for a peer ID or full multiaddr.
 - `aliases`: Show configured aliases.
@@ -109,10 +109,10 @@ Once the daemon is up and connected to the DHT through its bootstrap peers, cont
 ./p2pfs whohas <CID>
 ```
 
-- `fetch`: Tell daemon to download content by CID from the network into its local `export_dir`.
+- `fetch`: Tell daemon to download a file by manifest CID into its local `export_dir`.
 
 ```bash
-./p2pfs fetch <CID>
+./p2pfs fetch <MANIFEST_CID>
 ```
 
 - `list`: Connect to a remote peer explicitly and use the Index protocol to verify what they are serving, including filename, CID, and size.

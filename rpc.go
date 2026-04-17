@@ -11,12 +11,11 @@ import (
 )
 
 /*
- * rpc.go defines the RPC glue between CLI and the local daemon.
+ * rpc.go defines the RPC layer between CLI and the local daemon.
  *
- * The workflow is:
  * 1. A CLI command in main.go creates an RPC Client and issues a request.
  * 2. The local daemon receives that request through a daemon-side RPC handler.
- * 3. The handlers are wrappers that trigger logic such as doFetch(...) or doList(...).
+ * 3. The handlers are wrappers that trigger doFetch(...), doList(...), ... .
  */
 
 // ============================================================================
@@ -59,7 +58,7 @@ type ProviderInfo struct {
 
 // ============================================================================
 // Client-Side RPC Wrappers
-// These methods are called by the CLI in main.go. They send local control
+// These methods are called by the CLI in main.go. They issue local control
 // commands to the running daemon over the Unix RPC socket.
 // ============================================================================
 
@@ -125,7 +124,7 @@ func (api *P2PFSAPI) Fetch(args *FetchArgs, reply *FetchReply) error {
 	status := func(format string, args ...any) {
 		reply.Events = append(reply.Events, fmt.Sprintf(format, args...))
 	}
-	err := api.node.doFetchWithProgress(args.CID, args.PeerID, nil, status)
+	err := api.node.doFetchWithStatus(args.CID, args.PeerID, status)
 	if err == nil {
 		reply.Success = true
 	}

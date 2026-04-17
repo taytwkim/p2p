@@ -17,11 +17,9 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-/*
- * Transfer Protocol, stream-based protocol handling file downloads.
- * setupTransferProtocol is called once in node startup.
- * doFetch issues the transfer request, and handleTransferStream is the handler.
- */
+// This file defines how peers send manifest and chunk bytes to each other.
+// Fetching starts from a manifest CID, then the manifest tells us which chunks
+// to download and join back into a normal file.
 
 const transferProtocol = "/p2pfs/get/1.0.0"
 
@@ -41,79 +39,43 @@ func (n *Node) setupTransferProtocol() {
 }
 
 func (n *Node) doFetch(cid string, targetPeerID string) error {
-	return n.doFetchWithProgress(cid, targetPeerID, nil, nil)
+	return n.doFetchWithStatus(cid, targetPeerID, nil)
 }
 
-func (n *Node) doFetchWithProgress(cid string, targetPeerID string, progress func(written, total int64), status func(format string, args ...any)) error {
-	var target peer.ID
-	var err error
-	var providerInfo peer.AddrInfo
-	var remoteFilename string
-
-	if targetPeerID != "" {
-		target, err = peer.Decode(targetPeerID)
-		if err != nil {
-			return fmt.Errorf("invalid peer id: %v", err)
-		}
-	} else {
-		providers, err := n.DHT.FindProviders(context.Background(), cid, 20)
-		if err != nil {
-			return fmt.Errorf("failed to query DHT providers: %w", err)
-		}
-		if len(providers) == 0 {
-			return errors.New("no providers known for this CID. Use 'whohas' first")
-		}
-		validated := false
-		for _, candidate := range providers {
-			targetAddr := addrInfoToP2PAddr(candidate)
-			if targetAddr == "" {
-				continue
-			}
-
-			hasCID, err := n.doHas(targetAddr, cid)
-			if err != nil {
-				log.Printf("Skipping provider %s during HAS probe: %v", candidate.ID, err)
-				continue
-			}
-			if !hasCID {
-				log.Printf("Skipping stale provider %s for CID %s", candidate.ID, cid)
-				continue
-			}
-
-			target = candidate.ID
-			providerInfo = candidate
-			validated = true
-			break
-		}
-		if !validated {
-			return errors.New("no live providers confirmed for this CID")
-		}
+// doFetchWithStatus starts a download from a manifest CID.
+// It finds a peer, asks for the manifest bytes, checks that the response is actually a manifest,
+// and then hands off to finishChunkedFetch to download the chunks.
+func (n *Node) doFetchWithStatus(manifestCID string, targetPeerID string, status func(format string, args ...any)) error {
+	// Pick the peer that should provide the manifest.
+	// If the user supplied a specific peer, this uses that peer; otherwise it asks the DHT.
+	target, providerInfo, err := n.findFetchTarget(manifestCID, targetPeerID)
+	if err != nil {
+		return err
 	}
 
-	emitFetchStatus(status, "Fetching %s from %s", cid, target)
+	emitFetchStatus(status, "Fetching manifest %s from %s", manifestCID, target)
 
-	ctx := context.Background() // For transfer, we just use background, but real app might want timeout
+	ctx := context.Background()
 
+	// If findFetchTarget returned an address, connect explicitly before opening the transfer stream.
 	if providerInfo.ID != "" && len(providerInfo.Addrs) > 0 {
 		if err := n.Host.Connect(ctx, providerInfo); err != nil {
 			emitFetchStatus(status, "Warning: failed to explicitly connect to provider: %v", err)
 		}
 	}
 
+	// Open a stream to the selected peer and ask for the manifest CID.
 	s, err := n.Host.NewStream(ctx, target, transferProtocol)
 	if err != nil {
 		return fmt.Errorf("failed to open transfer stream: %w", err)
 	}
 	defer s.Close()
 
-	// Send request
-	req := TransferRequest{CID: cid}
-	encoder := json.NewEncoder(s)
-	if err := encoder.Encode(req); err != nil {
+	if err := json.NewEncoder(s).Encode(TransferRequest{CID: manifestCID}); err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
 
-	// Read response header
+	// The response starts with one JSON header line, followed by raw bytes.
 	var resp TransferResponse
 	bodyReader, err := readTransferResponseHeader(s, &resp)
 	if err != nil {
@@ -124,72 +86,21 @@ func (n *Node) doFetchWithProgress(cid string, targetPeerID string, progress fun
 		return fmt.Errorf("remote error: %s", resp.Error)
 	}
 
-	if resp.Kind == string(ObjectManifest) {
-		return n.finishChunkedFetch(bodyReader, cid, resp, targetPeerID, status)
+	// Fetch is now manifest-only, so a chunk CID or any other object kind is a user error.
+	if resp.Kind != string(ObjectManifest) {
+		return fmt.Errorf("expected manifest CID, got %q object", resp.Kind)
 	}
 
-	emitFetchStatus(status, "Incoming filesize: %d bytes", resp.Filesize)
-
-	filename := safeDownloadFilename(resp.Filename, remoteFilename, cid)
-
-	// Save to a temp file first, then verify the bytes really match the CID we
-	// requested before exposing them as a finished local object.
-	tempPath := filepath.Join(n.ExportDir, filename+".downloading")
-	finalPath := uniqueDownloadPath(filepath.Join(n.ExportDir, filename))
-
-	outFile, err := os.Create(tempPath)
-	if err != nil {
-		return fmt.Errorf("failed to create temp file: %w", err)
-	}
-
-	// Read data
-	written, err := copyWithProgress(outFile, io.LimitReader(bodyReader, resp.Filesize), resp.Filesize, progress)
-	outFile.Close()
-
-	if err != nil && err != io.EOF {
-		os.Remove(tempPath)
-		return fmt.Errorf("transfer failed mid-stream: %w", err)
-	}
-
-	if written != resp.Filesize {
-		os.Remove(tempPath)
-		return fmt.Errorf("incomplete file transfer: got %d, expected %d", written, resp.Filesize)
-	}
-
-	computedCID, err := ComputeCID(tempPath)
-	if err != nil {
-		os.Remove(tempPath)
-		return fmt.Errorf("failed to compute CID after download: %w", err)
-	}
-	if computedCID != cid {
-		os.Remove(tempPath)
-		return fmt.Errorf("downloaded bytes do not match requested CID: got %s", computedCID)
-	}
-
-	// Rename final
-	if err := os.Rename(tempPath, finalPath); err != nil {
-		return fmt.Errorf("failed to rename finalized file: %w", err)
-	}
-
-	// Update local files map so we instantly serve it
-	n.localFilesLock.Lock()
-	n.LocalFiles[cid] = LocalFileRecord{
-		CID:      cid,
-		Kind:     ObjectFile,
-		Filename: filepath.Base(finalPath),
-		Path:     finalPath,
-		Size:     resp.Filesize,
-		Length:   resp.Filesize,
-	}
-	n.localFilesLock.Unlock()
-
-	emitFetchStatus(status, "Successfully downloaded %s as %s", cid, filepath.Base(finalPath))
-	return nil
+	return n.finishChunkedFetch(bodyReader, manifestCID, resp, targetPeerID, status)
 }
 
+// finishChunkedFetch turns a downloaded manifest into a final local file.
+// It verifies the manifest, downloads the chunks listed inside it, joins those
+// chunks in order, and checks that the rebuilt file matches the manifest.
 func (n *Node) finishChunkedFetch(r io.Reader, manifestCID string, resp TransferResponse, targetPeerID string, status func(format string, args ...any)) error {
 	emitFetchStatus(status, "Fetching manifest %s", manifestCID)
 
+	// Read exactly the manifest bytes promised by the response header.
 	manifestBytes, err := io.ReadAll(io.LimitReader(r, resp.Filesize))
 	if err != nil {
 		return fmt.Errorf("failed to read manifest: %w", err)
@@ -198,6 +109,7 @@ func (n *Node) finishChunkedFetch(r io.Reader, manifestCID string, resp Transfer
 		return fmt.Errorf("incomplete manifest transfer: got %d, expected %d", len(manifestBytes), resp.Filesize)
 	}
 
+	// The manifest CID must match the actual manifest bytes we received.
 	computedCID, err := ComputeCIDFromBytes(manifestBytes)
 	if err != nil {
 		return fmt.Errorf("failed to verify manifest CID: %w", err)
@@ -206,6 +118,7 @@ func (n *Node) finishChunkedFetch(r io.Reader, manifestCID string, resp Transfer
 		return fmt.Errorf("manifest bytes do not match requested CID: got %s", computedCID)
 	}
 
+	// Decode the manifest JSON so we can see the filename, final file CID, and chunk list.
 	var manifest Manifest
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		return fmt.Errorf("failed to parse manifest: %w", err)
@@ -214,6 +127,7 @@ func (n *Node) finishChunkedFetch(r io.Reader, manifestCID string, resp Transfer
 		return fmt.Errorf("unsupported manifest version %d", manifest.Version)
 	}
 
+	// Save the manifest locally so this peer can serve it later too.
 	if err := ensureP2PFSDirs(n.ExportDir); err != nil {
 		return err
 	}
@@ -222,18 +136,23 @@ func (n *Node) finishChunkedFetch(r io.Reader, manifestCID string, resp Transfer
 	}
 
 	emitFetchStatus(status, "Manifest describes %s: %d bytes, %d chunks", manifest.Filename, manifest.FileSize, len(manifest.Chunks))
+	// Download every chunk listed by the manifest. This function handles the
+	// parallel workers.
 	if err := n.fetchManifestChunks(&manifest, targetPeerID, status); err != nil {
 		return err
 	}
 
+	// Rebuild into a temp file first, so an interrupted download does not leave a
+	// half-finished file with the final name.
 	tempPath := filepath.Join(n.ExportDir, manifest.Filename+".downloading")
-	finalPath := uniqueDownloadPath(filepath.Join(n.ExportDir, safeDownloadFilename(manifest.Filename, "", manifest.FileCID)))
+	finalPath := uniqueDownloadPath(filepath.Join(n.ExportDir, safeDownloadFilename(manifest.Filename, manifest.FileCID)))
 
 	outFile, err := os.Create(tempPath)
 	if err != nil {
 		return fmt.Errorf("failed to create temp output: %w", err)
 	}
 
+	// Join cached chunks in manifest order.
 	for _, chunk := range manifest.Chunks {
 		chunkFile, err := os.Open(chunkStoragePath(n.ExportDir, chunk.CID))
 		if err != nil {
@@ -251,6 +170,8 @@ func (n *Node) finishChunkedFetch(r io.Reader, manifestCID string, resp Transfer
 	}
 	outFile.Close()
 
+	// Verify the rebuilt file against the complete file CID stored in the
+	// manifest.
 	computedFileCID, err := ComputeCID(tempPath)
 	if err != nil {
 		os.Remove(tempPath)
@@ -261,29 +182,41 @@ func (n *Node) finishChunkedFetch(r io.Reader, manifestCID string, resp Transfer
 		return fmt.Errorf("reconstructed file CID mismatch: got %s, expected %s", computedFileCID, manifest.FileCID)
 	}
 
+	// Now it is safe to expose the finished file to the user.
 	if err := os.Rename(tempPath, finalPath); err != nil {
 		return fmt.Errorf("failed to rename reconstructed file: %w", err)
 	}
 
-	n.updateLocalFiles()
+	// Rescan so this peer advertises the new manifest and chunks on future
+	// lookups.
+	n.updateLocalObjects()
 	emitFetchStatus(status, "Successfully reconstructed %s as %s", manifest.FileCID, filepath.Base(finalPath))
 	return nil
 }
 
+// fetchManifestChunks downloads all chunks from a manifest.
+// This is the part that makes chunk downloading parallel: a few worker goroutines pull chunk jobs from
+// a shared queue until all chunks have been fetched.
 func (n *Node) fetchManifestChunks(manifest *Manifest, targetPeerID string, status func(format string, args ...any)) error {
 	if len(manifest.Chunks) == 0 {
 		return nil
 	}
 
+	// Keep the demo simple: at most four chunks are downloaded at the same time.
 	parallelism := 4
 	if len(manifest.Chunks) < parallelism {
 		parallelism = len(manifest.Chunks)
 	}
 
+	// jobs is the queue of chunks to fetch.
+	// errCh collects worker errors so the caller can fail the whole download if any chunk fails.
 	jobs := make(chan ManifestChunk)
 	errCh := make(chan error, len(manifest.Chunks))
 	var wg sync.WaitGroup
 
+	// Start worker goroutines.
+	// Each worker waits for a chunk job, fetches it,
+	// then waits for another one until the jobs channel is closed.
 	for worker := 0; worker < parallelism; worker++ {
 		wg.Add(1)
 		go func() {
@@ -296,6 +229,7 @@ func (n *Node) fetchManifestChunks(manifest *Manifest, targetPeerID string, stat
 		}()
 	}
 
+	// Send every chunk to the workers.
 	for _, chunk := range manifest.Chunks {
 		jobs <- chunk
 	}
@@ -303,6 +237,7 @@ func (n *Node) fetchManifestChunks(manifest *Manifest, targetPeerID string, stat
 	wg.Wait()
 	close(errCh)
 
+	// Return the first chunk error, if any worker reported one.
 	for err := range errCh {
 		if err != nil {
 			return err
@@ -311,24 +246,31 @@ func (n *Node) fetchManifestChunks(manifest *Manifest, targetPeerID string, stat
 	return nil
 }
 
+// fetchOneChunk downloads one chunk and stores it in the local chunk cache.
+// This is a helper used by the parallel workers in fetchManifestChunks.
 func (n *Node) fetchOneChunk(chunk ManifestChunk, targetPeerID string, status func(format string, args ...any)) error {
 	chunkPath := chunkStoragePath(n.ExportDir, chunk.CID)
+	// If we already have this chunk and its bytes still match the CID, reuse it.
 	if cachedCID, err := ComputeCID(chunkPath); err == nil && cachedCID == chunk.CID {
 		emitFetchStatus(status, "chunk %d cached locally", chunk.Index)
 		return nil
 	}
 
+	// Download this chunk by its own CID.
 	data, resp, providerID, err := n.downloadObjectBytes(chunk.CID, targetPeerID)
 	if err != nil {
 		return fmt.Errorf("chunk %d fetch failed: %w", chunk.Index, err)
 	}
-	if resp.Kind != string(ObjectChunk) && resp.Kind != "" {
+	// The remote peer must send a chunk object, not a manifest.
+	if resp.Kind != string(ObjectChunk) {
 		return fmt.Errorf("chunk %d expected chunk object, got %q", chunk.Index, resp.Kind)
 	}
+	// The chunk size in the manifest must match what we received.
 	if int64(len(data)) != chunk.Size {
 		return fmt.Errorf("chunk %d size mismatch: got %d, expected %d", chunk.Index, len(data), chunk.Size)
 	}
 
+	// Write to a temp file first, then rename it into the cache.
 	tempPath := chunkPath + ".downloading"
 	if err := os.WriteFile(tempPath, data, 0644); err != nil {
 		return err
@@ -338,15 +280,17 @@ func (n *Node) fetchOneChunk(chunk ManifestChunk, targetPeerID string, status fu
 		return err
 	}
 
-	n.localFilesLock.Lock()
-	n.LocalFiles[chunk.CID] = LocalFileRecord{
+	// Add the downloaded chunk to LocalObjects so this peer can serve it.
+	n.localObjectsLock.Lock()
+	n.LocalObjects[chunk.CID] = LocalObjectRecord{
 		CID:    chunk.CID,
 		Kind:   ObjectChunk,
 		Path:   chunkPath,
 		Size:   chunk.Size,
 		Length: chunk.Size,
 	}
-	n.localFilesLock.Unlock()
+	n.localObjectsLock.Unlock()
+	// Announce the chunk so other peers can find it through the DHT.
 	if err := n.DHT.Provide(n.ctx, chunk.CID, true); err == nil {
 		n.providedLock.Lock()
 		n.ProvidedCIDs[chunk.CID] = struct{}{}
@@ -357,7 +301,11 @@ func (n *Node) fetchOneChunk(chunk ManifestChunk, targetPeerID string, status fu
 	return nil
 }
 
+// downloadObjectBytes downloads one CID-sized object into memory. It is a helper
+// for small objects like chunks: it finds a provider, asks for the CID, reads the
+// bytes, and verifies that the bytes match the CID requested.
 func (n *Node) downloadObjectBytes(cid string, targetPeerID string) ([]byte, TransferResponse, peer.ID, error) {
+	// Decide which peer should provide this CID.
 	target, providerInfo, err := n.findFetchTarget(cid, targetPeerID)
 	if err != nil {
 		return nil, TransferResponse{}, "", err
@@ -368,6 +316,7 @@ func (n *Node) downloadObjectBytes(cid string, targetPeerID string) ([]byte, Tra
 		_ = n.Host.Connect(ctx, providerInfo)
 	}
 
+	// Ask the chosen peer for this CID.
 	s, err := n.Host.NewStream(ctx, target, transferProtocol)
 	if err != nil {
 		return nil, TransferResponse{}, target, fmt.Errorf("failed to open transfer stream: %w", err)
@@ -378,6 +327,7 @@ func (n *Node) downloadObjectBytes(cid string, targetPeerID string) ([]byte, Tra
 		return nil, TransferResponse{}, target, fmt.Errorf("failed to send request: %w", err)
 	}
 
+	// Read the response header first, then the raw object bytes.
 	var resp TransferResponse
 	bodyReader, err := readTransferResponseHeader(s, &resp)
 	if err != nil {
@@ -387,6 +337,7 @@ func (n *Node) downloadObjectBytes(cid string, targetPeerID string) ([]byte, Tra
 		return nil, resp, target, fmt.Errorf("remote error: %s", resp.Error)
 	}
 
+	// Read exactly the number of bytes promised by the response header.
 	data, err := io.ReadAll(io.LimitReader(bodyReader, resp.Filesize))
 	if err != nil {
 		return nil, resp, target, err
@@ -395,6 +346,7 @@ func (n *Node) downloadObjectBytes(cid string, targetPeerID string) ([]byte, Tra
 		return nil, resp, target, fmt.Errorf("incomplete object transfer: got %d, expected %d", len(data), resp.Filesize)
 	}
 
+	// Verify that the bytes really are the object we asked for.
 	computedCID, err := ComputeCIDFromBytes(data)
 	if err != nil {
 		return nil, resp, target, err
@@ -406,7 +358,11 @@ func (n *Node) downloadObjectBytes(cid string, targetPeerID string) ([]byte, Tra
 	return data, resp, target, nil
 }
 
+// findFetchTarget chooses which peer to ask for a CID. If the user named a
+// specific peer, this helper uses it directly; otherwise it asks the DHT and
+// double-checks each candidate with HAS before trusting it.
 func (n *Node) findFetchTarget(cid string, targetPeerID string) (peer.ID, peer.AddrInfo, error) {
+	// User-specified peer: use it directly.
 	if targetPeerID != "" {
 		target, err := peer.Decode(targetPeerID)
 		if err != nil {
@@ -415,6 +371,7 @@ func (n *Node) findFetchTarget(cid string, targetPeerID string) (peer.ID, peer.A
 		return target, peer.AddrInfo{}, nil
 	}
 
+	// No specific peer: ask the DHT who claims to provide this CID.
 	providers, err := n.DHT.FindProviders(context.Background(), cid, 20)
 	if err != nil {
 		return "", peer.AddrInfo{}, fmt.Errorf("failed to query DHT providers: %w", err)
@@ -429,6 +386,7 @@ func (n *Node) findFetchTarget(cid string, targetPeerID string) (peer.ID, peer.A
 			continue
 		}
 
+		// Provider records can be stale, so ask the peer directly before using it.
 		hasCID, err := n.doHas(targetAddr, cid)
 		if err != nil {
 			log.Printf("Skipping provider %s during HAS probe: %v", candidate.ID, err)
@@ -444,6 +402,9 @@ func (n *Node) findFetchTarget(cid string, targetPeerID string) (peer.ID, peer.A
 	return "", peer.AddrInfo{}, errors.New("no live providers confirmed for this CID")
 }
 
+// emitFetchStatus is a tiny helper for progress messages. If the caller gave us
+// a status function, send the message there; otherwise write it to the normal
+// log.
 func emitFetchStatus(status func(format string, args ...any), format string, args ...any) {
 	if status != nil {
 		status(format, args...)
@@ -452,43 +413,13 @@ func emitFetchStatus(status func(format string, args ...any), format string, arg
 	log.Printf(format, args...)
 }
 
-func copyWithProgress(dst io.Writer, src io.Reader, total int64, progress func(written, total int64)) (int64, error) {
-	buf := make([]byte, 32*1024)
-	var written int64
-
-	if progress != nil {
-		progress(0, total)
-	}
-
-	for {
-		nr, er := src.Read(buf)
-		if nr > 0 {
-			nw, ew := dst.Write(buf[:nr])
-			written += int64(nw)
-			if progress != nil {
-				progress(written, total)
-			}
-			if ew != nil {
-				return written, ew
-			}
-			if nw != nr {
-				return written, io.ErrShortWrite
-			}
-		}
-
-		if er != nil {
-			if er == io.EOF {
-				return written, nil
-			}
-			return written, er
-		}
-	}
-}
-
+// handleTransferStream answers incoming GET requests from other peers. It looks
+// up the requested CID in LocalObjects, opens the local bytes, and streams either
+// a manifest file or a chunk byte range back to the requester.
 func (n *Node) handleTransferStream(s network.Stream) {
 	defer s.Close()
 
-	// Read Request
+	// Read the requested CID.
 	var req TransferRequest
 	decoder := json.NewDecoder(s)
 	if err := decoder.Decode(&req); err != nil {
@@ -500,10 +431,10 @@ func (n *Node) handleTransferStream(s network.Stream) {
 
 	log.Printf("Received GET request for %s from %s", req.CID, s.Conn().RemotePeer())
 
-	// Check if file exists
-	n.localFilesLock.RLock()
-	record, exists := n.LocalFiles[req.CID]
-	n.localFilesLock.RUnlock()
+	// Look up the requested object. It may be a manifest or a chunk.
+	n.localObjectsLock.RLock()
+	record, exists := n.LocalObjects[req.CID]
+	n.localObjectsLock.RUnlock()
 
 	if !exists {
 		encoder.Encode(TransferResponse{Error: "File not found"})
@@ -517,6 +448,8 @@ func (n *Node) handleTransferStream(s network.Stream) {
 	}
 	defer file.Close()
 
+	// For chunks backed by a larger source file, move to the chunk's starting
+	// byte before sending.
 	if record.Offset > 0 {
 		if _, err := file.Seek(record.Offset, io.SeekStart); err != nil {
 			encoder.Encode(TransferResponse{Error: "Internal server error"})
@@ -524,12 +457,12 @@ func (n *Node) handleTransferStream(s network.Stream) {
 		}
 	}
 
-	// Send Response Header
+	// Send one metadata line before sending raw bytes.
 	if err := writeTransferResponseHeader(s, TransferResponse{Kind: string(record.Kind), Filesize: record.Size, Filename: record.Filename}); err != nil {
 		return
 	}
 
-	// Stream Bytes
+	// Send the manifest file or the exact chunk byte range.
 	reader := io.Reader(file)
 	if record.Kind == ObjectChunk {
 		reader = io.LimitReader(file, record.Length)
@@ -542,6 +475,9 @@ func (n *Node) handleTransferStream(s network.Stream) {
 	}
 }
 
+// readTransferResponseHeader is a helper for reading the metadata line at the
+// start of a transfer response. It returns a reader positioned at the first byte
+// of the actual manifest or chunk content.
 func readTransferResponseHeader(r io.Reader, resp *TransferResponse) (io.Reader, error) {
 	buffered := bufio.NewReader(r)
 	line, err := buffered.ReadBytes('\n')
@@ -554,6 +490,9 @@ func readTransferResponseHeader(r io.Reader, resp *TransferResponse) (io.Reader,
 	return buffered, nil
 }
 
+// writeTransferResponseHeader is the matching helper for the sender side. It
+// writes one JSON line before the sender streams the raw manifest or chunk
+// bytes.
 func writeTransferResponseHeader(w io.Writer, resp TransferResponse) error {
 	line, err := json.Marshal(resp)
 	if err != nil {
@@ -565,21 +504,27 @@ func writeTransferResponseHeader(w io.Writer, resp TransferResponse) error {
 	return nil
 }
 
-func safeDownloadFilename(primaryName, fallbackName, cid string) string {
-	for _, name := range []string{primaryName, fallbackName} {
+// safeDownloadFilename is a helper that chooses a local output filename. It
+// rejects names that try to escape the export directory, such as
+// "../hello.txt".
+func safeDownloadFilename(primaryName, fallbackCID string) string {
+	for _, name := range []string{primaryName, fallbackCID + ".bin"} {
 		if name == "" {
 			continue
 		}
+		if filepath.Base(name) != name {
+			continue
+		}
 		if strings.Contains(name, "/") || strings.Contains(name, "\\") {
-			// safety check to prevent overwriting outside the export directory
-			// don't allow files like ../hello.txt
 			continue
 		}
 		return name
 	}
-	return cid + ".bin"
+	return "download.bin"
 }
 
+// addrInfoToP2PAddr is a small helper for turning libp2p peer info into the
+// address string used by doHas.
 func addrInfoToP2PAddr(info peer.AddrInfo) string {
 	if len(info.Addrs) == 0 {
 		return ""
@@ -587,9 +532,8 @@ func addrInfoToP2PAddr(info peer.AddrInfo) string {
 	return fmt.Sprintf("%s/p2p/%s", info.Addrs[0], info.ID)
 }
 
-// make sure we don’t overwrite an existing local file.
-// If the target path is free, it returns it unchanged.
-// If the filename already exists, generate names like name-1.ext, name-2.ext
+// uniqueDownloadPath is a helper that avoids overwriting an existing file. If
+// "name.txt" already exists, it tries "name-1.txt", "name-2.txt", and so on.
 func uniqueDownloadPath(path string) string {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return path

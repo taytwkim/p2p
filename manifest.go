@@ -8,27 +8,55 @@ import (
 )
 
 const (
-	manifestVersion = 1
-
-	// This intentionally small size makes early demos easy to inspect:
-	// "AAAA\nBBBB\nCCCC\n" becomes three chunks.
+	manifestVersion        = 1
 	defaultChunkSize int64 = 5
 )
 
+// This is how a manifest of a file is organized.
+//
+// {
+//   "version": 1,
+//   "filename": "<original filename>",
+//   "fileSize": <total file size in bytes>,
+//   "fileCid": "<CID of the complete original file>",
+//   "chunkSize": <target chunk size in bytes>,
+//   "chunks": [
+//     {
+//       "index": 0,
+//       "cid": "<CID of chunk 0 bytes>",
+//       "size": <actual chunk 0 size in bytes>,
+//       "offset": 0
+//     },
+//     {
+//       "index": 1,
+//       "cid": "<CID of chunk 1 bytes>",
+//       "size": <actual chunk 1 size in bytes>,
+//       "offset": <byte offset where chunk 1 begins>
+//     },
+//     {
+//       "index": 2,
+//       "cid": "<CID of chunk 2 bytes>",
+//       "size": <actual chunk 2 size in bytes>,
+//       "offset": <byte offset where chunk 2 begins>
+//     },
+// 	   ...
+//   ]
+// }
+
 type Manifest struct {
 	Version   int             `json:"version"`
-	Filename  string          `json:"filename"`
-	FileSize  int64           `json:"fileSize"`
-	FileCID   string          `json:"fileCid"`
-	ChunkSize int64           `json:"chunkSize"`
-	Chunks    []ManifestChunk `json:"chunks"`
+	Filename  string          `json:"filename"`  // the original filename we want to reconstruct.
+	FileSize  int64           `json:"fileSize"`  // total size of the original file in bytes.
+	FileCID   string          `json:"fileCid"`   // CID of the complete original file.
+	ChunkSize int64           `json:"chunkSize"` // target chunk size used when splitting the file.
+	Chunks    []ManifestChunk `json:"chunks"`    // ordered list of chunk records.
 }
 
 type ManifestChunk struct {
-	Index  int    `json:"index"`
-	CID    string `json:"cid"`
-	Size   int64  `json:"size"`
-	Offset int64  `json:"offset"`
+	Index  int    `json:"index"`  // chunk’s position in the file.
+	CID    string `json:"cid"`    // CID of this chunk’s bytes.
+	Size   int64  `json:"size"`   // size of this chunk in bytes (equals chunkSize, except the last chunk may be smaller).
+	Offset int64  `json:"offset"` // Where this chunk starts in the original file.
 }
 
 func BuildManifest(path, filename string, chunkSize int64) (*Manifest, []byte, string, error) {

@@ -12,9 +12,13 @@ import (
 )
 
 /*
- * Index Protocol, stream-based request protocol allowing peers to manually verify what files a target peer is serving.
- * setupIndexProtocol is called once in node startup.
- * doList issues the list request, and handleIndexStream is the handler.
+ * Index Protocol is a request protocol allowing peers to manually verify what files a target peer is serving.
+ * 		- setupIndexProtocol is called once in node startup.
+ * 		- doList issues a request, and handleIndexStream is the handler.
+ *
+ * The Index Protocol supports TWO types of requests, specified by the "Op" field.
+ * 		- LIST lists all files served by a peer.
+ * 		- HAS confirms if peer has CID X, and is used internally before a fetch.
  */
 
 const indexProtocol = "/p2pfs/index/1.0.0"
@@ -30,7 +34,6 @@ type IndexFile struct {
 	Filename    string `json:"filename"`
 	Size        int64  `json:"size"`
 	ManifestCID string `json:"manifestCid,omitempty"`
-	FileCID     string `json:"fileCid,omitempty"`
 	ChunkCount  int    `json:"chunkCount,omitempty"`
 }
 
@@ -143,9 +146,9 @@ func (n *Node) handleIndexStream(s network.Stream) {
 	switch req.Op {
 	case "LIST":
 		log.Printf("Received LIST request from %s", s.Conn().RemotePeer())
-		n.localFilesLock.RLock()
+		n.localObjectsLock.RLock()
 		var files []IndexFile
-		for _, f := range n.LocalFiles {
+		for _, f := range n.LocalObjects {
 			if f.Kind != ObjectManifest {
 				continue
 			}
@@ -155,18 +158,17 @@ func (n *Node) handleIndexStream(s network.Stream) {
 				Filename:    f.Filename,
 				Size:        f.Manifest.FileSize,
 				ManifestCID: f.ManifestCID,
-				FileCID:     f.FileCID,
 				ChunkCount:  f.ChunkCount,
 			})
 		}
-		n.localFilesLock.RUnlock()
+		n.localObjectsLock.RUnlock()
 
 		encoder.Encode(IndexResponse{Files: files})
 
 	case "HAS":
-		n.localFilesLock.RLock()
-		_, exists := n.LocalFiles[req.CID]
-		n.localFilesLock.RUnlock()
+		n.localObjectsLock.RLock()
+		_, exists := n.LocalObjects[req.CID]
+		n.localObjectsLock.RUnlock()
 
 		encoder.Encode(IndexResponse{Has: exists})
 
