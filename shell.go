@@ -15,11 +15,9 @@ import (
 	"sync"
 
 	"github.com/chzyer/readline"
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/multiformats/go-multiaddr"
 )
 
-// This file implements an interactive shell used to control a p2p daemon
+// This file implements an interactive shell used to play around with a p2p daemon
 // To start a node in interactive mode, run ./p2pfs shell ... instead of ./p2pfs daemon ...
 
 const (
@@ -151,18 +149,15 @@ func (s *shellSession) runCommand(line string) error {
 			fmt.Printf("  %s/p2p/%s\n", addr, s.node.Host.ID())
 		}
 	case "files":
-		s.node.localObjectsLock.RLock()
-		files := make([]LocalObjectRecord, 0, len(s.node.LocalObjects))
-		for _, f := range s.node.LocalObjects {
-			if f.Kind != ObjectManifest {
-				continue
-			}
+		s.node.stateLock.RLock()
+		files := make([]CompleteFile, 0, len(s.node.CompleteFiles))
+		for _, f := range s.node.CompleteFiles {
 			files = append(files, f)
 		}
-		s.node.localObjectsLock.RUnlock()
+		s.node.stateLock.RUnlock()
 
 		sort.Slice(files, func(i, j int) bool {
-			return files[i].Filename < files[j].Filename
+			return files[i].Manifest.Filename < files[j].Manifest.Filename
 		})
 
 		if len(files) == 0 {
@@ -172,44 +167,32 @@ func (s *shellSession) runCommand(line string) error {
 
 		fmt.Println("Local files:")
 		for _, f := range files {
-			fileSize := f.Size
-			if f.Manifest != nil {
-				fileSize = f.Manifest.FileSize
-			}
-			fmt.Printf("  %s\n", f.Filename)
-			fmt.Printf("    manifest: %s\n", f.CID)
-			fmt.Printf("    size:     %d bytes\n", fileSize)
-			fmt.Printf("    chunks:   %d\n", f.ChunkCount)
+			fmt.Printf("  %s\n", f.Manifest.Filename)
+			fmt.Printf("    manifest: %s\n", f.ManifestCID)
+			fmt.Printf("    size:     %d bytes\n", f.Manifest.FileSize)
+			fmt.Printf("    pieces:   %d\n", len(f.Manifest.Pieces))
 		}
 	case "whohas":
 		if len(args) != 2 {
-			return fmt.Errorf("usage: whohas <cid>")
+			return fmt.Errorf("usage: whohas <manifest-cid>")
 		}
 		providers, err := s.node.DHT.FindProviders(context.Background(), args[1], 20)
 		if err != nil {
 			return err
 		}
 		if len(providers) == 0 {
-			s.printWarn("No providers found.")
+			s.printWarn("No swarm participants found.")
 			return nil
 		}
-		fmt.Println("Providers:")
+		fmt.Println("Swarm participants:")
 		for _, info := range providers {
 			fmt.Printf("  %s%s\n", s.aliasLabel(info.ID.String()), info.ID)
 		}
 	case "fetch":
-		if len(args) < 2 || len(args) > 3 {
-			return fmt.Errorf("usage: fetch <manifest-cid> [peer_id_or_alias]")
+		if len(args) != 2 {
+			return fmt.Errorf("usage: fetch <manifest-cid>")
 		}
-		peerID := ""
-		if len(args) == 3 {
-			resolvedPeerID, err := s.resolvePeerID(args[2])
-			if err != nil {
-				return err
-			}
-			peerID = resolvedPeerID
-		}
-		return s.runFetch(args[1], peerID)
+		return s.runFetch(args[1])
 	case "list":
 		if len(args) != 2 {
 			return fmt.Errorf("usage: list <peer_multiaddr_or_alias>")
@@ -228,7 +211,7 @@ func (s *shellSession) runCommand(line string) error {
 			fmt.Printf("  %s\n", f.Filename)
 			fmt.Printf("    manifest: %s\n", f.ManifestCID)
 			fmt.Printf("    size:     %d bytes\n", f.Size)
-			fmt.Printf("    chunks:   %d\n", f.ChunkCount)
+			fmt.Printf("    pieces:   %d\n", f.PieceCount)
 		}
 	case "alias":
 		if len(args) != 3 {
@@ -286,34 +269,8 @@ func (s *shellSession) aliasLabel(value string) string {
 		if target == value {
 			return name + " "
 		}
-		if peerID, ok := peerIDFromAliasTarget(target); ok && peerID == value {
-			return name + " "
-		}
 	}
 	return ""
-}
-
-func (s *shellSession) resolvePeerID(value string) (string, error) {
-	resolved := s.resolveAlias(value)
-	if _, err := peer.Decode(resolved); err == nil {
-		return resolved, nil
-	}
-	if peerID, ok := peerIDFromAliasTarget(resolved); ok {
-		return peerID, nil
-	}
-	return "", fmt.Errorf("expected peer ID or alias pointing to a peer, got %q", value)
-}
-
-func peerIDFromAliasTarget(target string) (string, bool) {
-	maddr, err := multiaddr.NewMultiaddr(target)
-	if err != nil {
-		return "", false
-	}
-	info, err := peer.AddrInfoFromP2pAddr(maddr)
-	if err != nil {
-		return "", false
-	}
-	return info.ID.String(), true
 }
 
 func (s *shellSession) printInfo(format string, args ...any) {
@@ -328,11 +285,11 @@ func (s *shellSession) printError(format string, args ...any) {
 	fmt.Fprintf(s.rl.Stdout(), colorError+format+colorReset+"\n", args...)
 }
 
-func (s *shellSession) runFetch(cid, peerID string) error {
+func (s *shellSession) runFetch(cid string) error {
 	status := func(format string, args ...any) {
 		fmt.Fprintf(s.rl.Stdout(), colorInfo+format+colorReset+"\n", args...)
 	}
-	return s.node.doFetchWithStatus(cid, peerID, status)
+	return s.node.doFetchWithStatus(cid, status)
 }
 
 func (s *shellSession) runLogCommand(args []string) error {
@@ -494,7 +451,7 @@ func printShellHelp() {
 	fmt.Println("  help                         Show this help")
 	fmt.Println("  id                           Show peer ID and listen addresses")
 	fmt.Println("  files                        Show local files discovered in export_dir")
-	fmt.Println("  whohas <cid>                 Query the DHT for providers of a CID")
+	fmt.Println("  whohas <manifest-cid>        Query the DHT for peers in a manifest swarm")
 	fmt.Println("  fetch <manifest-cid> [peer|alias] Fetch a file by manifest CID")
 	fmt.Println("  list <multiaddr|alias>       List the files served by a remote peer")
 	fmt.Println("  alias <name> <target>        Save a short alias for a peer ID or multiaddr")

@@ -10,7 +10,7 @@ import (
 )
 
 /*
- * Main driver that dispatches runX
+ * Main driver for our system
  *
  * 	- runDaemon starts a p2p node as a daemon.
  *	- runWhohas, runFetch, and runList are CLI commands we use to control local daemon over RPC.
@@ -19,8 +19,8 @@ import (
  *
  * Example:
  * 		1. We issue runFetch on CLI
- * 		2. local daemon receives runFetch and calls doFetch (see rpc.go and transfer.go)
- * 		3. remote peer receives doFetch which is handled by handleTransferStream (see transfer.go)
+ * 		2. local daemon receives runFetch and calls doFetch (see rpc.go and transfer_fetch.go)
+ * 		3. remote peer receives doFetch which is handled by handleTransferStream (see transfer_serve.go)
  */
 
 func main() {
@@ -55,8 +55,8 @@ func printUsage() {
 	fmt.Println("Commands:")
 	fmt.Println("  daemon  Run the p2pfs daemon")
 	fmt.Println("  shell   Run an interactive p2pfs shell")
-	fmt.Println("  whohas  Find who has a specific CID")
-	fmt.Println("  fetch   Download content by CID")
+	fmt.Println("  whohas  Find peers participating in a manifest swarm")
+	fmt.Println("  fetch   Download a file by manifest CID")
 	fmt.Println("  list    List files served by a peer with filenames and CIDs")
 }
 
@@ -120,12 +120,12 @@ func runWhohas(args []string) {
 	fs.Parse(args)
 
 	if fs.NArg() < 1 {
-		fmt.Println("Usage: p2pfs whohas [--rpc <socket>] <cid>")
+		fmt.Println("Usage: p2pfs whohas [--rpc <socket>] <manifest-cid>")
 		os.Exit(1)
 	}
 
 	cid := fs.Arg(0)
-	fmt.Printf("Querying who has CID: %s\n", cid)
+	fmt.Printf("Querying swarm participants for manifest: %s\n", cid)
 
 	// connect to daemon to issue commands
 	client := NewClient(*rpcOpt)
@@ -135,24 +135,23 @@ func runWhohas(args []string) {
 		log.Fatalf("Error: %v", err)
 	}
 	if len(providers) == 0 {
-		fmt.Println("No providers found.")
+		fmt.Println("No swarm participants found.")
 	} else {
-		fmt.Printf("Providers for %s:\n", cid)
+		fmt.Printf("Swarm participants for %s:\n", cid)
 		for _, p := range providers {
 			fmt.Printf("  %s\n", p.PeerID)
 		}
 	}
 }
 
-// download file from peer X
+// download file from the manifest swarm
 func runFetch(args []string) {
 	fs := flag.NewFlagSet("fetch", flag.ExitOnError)
-	fromPeer := fs.String("from", "", "Specific peer ID to fetch from (optional)")
 	rpcOpt := fs.String("rpc", "/tmp/p2pfs.sock", "RPC Unix socket path")
 	fs.Parse(args)
 
 	if fs.NArg() < 1 {
-		fmt.Println("Usage: p2pfs fetch <manifest-cid> [--from <peer_id>]")
+		fmt.Println("Usage: p2pfs fetch <manifest-cid>")
 		os.Exit(1)
 	}
 	cid := fs.Arg(0)
@@ -161,7 +160,7 @@ func runFetch(args []string) {
 	client := NewClient(*rpcOpt)
 
 	startTime := time.Now()
-	reply, err := client.Fetch(cid, *fromPeer)
+	reply, err := client.Fetch(cid)
 	for _, event := range reply.Events {
 		fmt.Printf("  %s\n", event)
 	}
@@ -194,6 +193,6 @@ func runList(args []string) {
 		fmt.Printf("  - %s\n", f.Filename)
 		fmt.Printf("      manifest: %s\n", f.ManifestCID)
 		fmt.Printf("      size:     %d bytes\n", f.Size)
-		fmt.Printf("      chunks:   %d\n", f.ChunkCount)
+		fmt.Printf("      pieces:   %d\n", f.PieceCount)
 	}
 }

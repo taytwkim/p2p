@@ -9,7 +9,7 @@ import (
 
 const (
 	manifestVersion        = 1
-	defaultChunkSize int64 = 5
+	defaultPieceSize int64 = 5
 )
 
 // This is how a manifest of a file is organized.
@@ -19,25 +19,25 @@ const (
 //   "filename": "<original filename>",
 //   "fileSize": <total file size in bytes>,
 //   "fileCid": "<CID of the complete original file>",
-//   "chunkSize": <target chunk size in bytes>,
-//   "chunks": [
+//   "pieceSize": <target piece size in bytes>,
+//   "pieces": [
 //     {
 //       "index": 0,
-//       "cid": "<CID of chunk 0 bytes>",
-//       "size": <actual chunk 0 size in bytes>,
+//       "cid": "<CID of piece 0 bytes>",
+//       "size": <actual piece 0 size in bytes>,
 //       "offset": 0
 //     },
 //     {
 //       "index": 1,
-//       "cid": "<CID of chunk 1 bytes>",
-//       "size": <actual chunk 1 size in bytes>,
-//       "offset": <byte offset where chunk 1 begins>
+//       "cid": "<CID of piece 1 bytes>",
+//       "size": <actual piece 1 size in bytes>,
+//       "offset": <byte offset where piece 1 begins>
 //     },
 //     {
 //       "index": 2,
-//       "cid": "<CID of chunk 2 bytes>",
-//       "size": <actual chunk 2 size in bytes>,
-//       "offset": <byte offset where chunk 2 begins>
+//       "cid": "<CID of piece 2 bytes>",
+//       "size": <actual piece 2 size in bytes>,
+//       "offset": <byte offset where piece 2 begins>
 //     },
 // 	   ...
 //   ]
@@ -48,20 +48,20 @@ type Manifest struct {
 	Filename  string          `json:"filename"`  // the original filename we want to reconstruct.
 	FileSize  int64           `json:"fileSize"`  // total size of the original file in bytes.
 	FileCID   string          `json:"fileCid"`   // CID of the complete original file.
-	ChunkSize int64           `json:"chunkSize"` // target chunk size used when splitting the file.
-	Chunks    []ManifestChunk `json:"chunks"`    // ordered list of chunk records.
+	PieceSize int64           `json:"pieceSize"` // target piece size used when splitting the file.
+	Pieces    []ManifestPiece `json:"pieces"`    // ordered list of piece records.
 }
 
-type ManifestChunk struct {
-	Index  int    `json:"index"`  // chunk’s position in the file.
-	CID    string `json:"cid"`    // CID of this chunk’s bytes.
-	Size   int64  `json:"size"`   // size of this chunk in bytes (equals chunkSize, except the last chunk may be smaller).
-	Offset int64  `json:"offset"` // Where this chunk starts in the original file.
+type ManifestPiece struct {
+	Index  int    `json:"index"`  // piece's position in the file.
+	CID    string `json:"cid"`    // CID of this piece's bytes.
+	Size   int64  `json:"size"`   // size of this piece in bytes (equals pieceSize, except the last piece may be smaller).
+	Offset int64  `json:"offset"` // Where this piece starts in the original file.
 }
 
-func BuildManifest(path, filename string, chunkSize int64) (*Manifest, []byte, string, error) {
-	if chunkSize <= 0 {
-		return nil, nil, "", fmt.Errorf("chunk size must be positive")
+func BuildManifest(path, filename string, pieceSize int64) (*Manifest, []byte, string, error) {
+	if pieceSize <= 0 {
+		return nil, nil, "", fmt.Errorf("piece size must be positive")
 	}
 
 	file, err := os.Open(path)
@@ -85,10 +85,10 @@ func BuildManifest(path, filename string, chunkSize int64) (*Manifest, []byte, s
 		Filename:  filename,
 		FileSize:  info.Size(),
 		FileCID:   fileCID,
-		ChunkSize: chunkSize,
+		PieceSize: pieceSize,
 	}
 
-	buf := make([]byte, chunkSize)
+	buf := make([]byte, pieceSize)
 	var offset int64
 	for index := 0; ; index++ {
 		n, readErr := io.ReadFull(file, buf)
@@ -99,15 +99,15 @@ func BuildManifest(path, filename string, chunkSize int64) (*Manifest, []byte, s
 			return nil, nil, "", readErr
 		}
 
-		chunkBytes := buf[:n]
-		chunkCID, err := ComputeCIDFromBytes(chunkBytes)
+		pieceBytes := buf[:n]
+		pieceCID, err := ComputeCIDFromBytes(pieceBytes)
 		if err != nil {
 			return nil, nil, "", err
 		}
 
-		manifest.Chunks = append(manifest.Chunks, ManifestChunk{
+		manifest.Pieces = append(manifest.Pieces, ManifestPiece{
 			Index:  index,
-			CID:    chunkCID,
+			CID:    pieceCID,
 			Size:   int64(n),
 			Offset: offset,
 		})

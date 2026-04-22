@@ -36,7 +36,7 @@ setup() {
     echo -e "${BLUE}Setting up directories...${NC}"
     mkdir -p "$PEER_A_EXPORT" "$PEER_B_EXPORT" "$PEER_C_EXPORT"
     echo "Hello from Peer A!" > "$PEER_A_EXPORT/foo.txt"
-    printf "AAAA\nBBBB\nCCCC\n" > "$PEER_A_EXPORT/chunks.txt"
+    printf "AAAA\nBBBB\nCCCC\n" > "$PEER_A_EXPORT/pieces.txt"
 
     echo -e "${GREEN}Starting Peer A (Seed)...${NC}"
     "$BINARY" daemon -listen /ip4/127.0.0.1/tcp/4001 -export_dir "$PEER_A_EXPORT" -rpc /tmp/p2pfsA.sock > "$PEER_A_LOG" 2>&1 &
@@ -56,13 +56,13 @@ setup() {
     "$BINARY" daemon -listen /ip4/127.0.0.1/tcp/4003 -export_dir "$PEER_C_EXPORT" -rpc /tmp/p2pfsC.sock -bootstrap "$B_ADDR" > "$PEER_C_LOG" 2>&1 &
     
     echo -e "\n${BLUE}All peers started! Wait a few seconds for the DHT routing tables to warm up (~5-10s)...${NC}"
-    echo -e "You can now run commands against Peer C to inspect files, find the manifest CID for foo.txt or chunks.txt, and fetch it:"
+    echo -e "You can now run commands against Peer C to inspect files, find the manifest CID for foo.txt or pieces.txt, and fetch it:"
     echo -e "  ./p2pfs list   --rpc /tmp/p2pfsC.sock --peer <REMOTE_MULTIADDR>"
     echo -e "  ./p2pfs whohas --rpc /tmp/p2pfsC.sock <MANIFEST_CID>"
     echo -e "  ./p2pfs fetch  --rpc /tmp/p2pfsC.sock <MANIFEST_CID>"
     echo -e "  cat peerC_export/foo.txt\n"
-    echo -e "For the readable chunking smoke test, fetch chunks.txt and then run:"
-    echo -e "  cat peerC_export/chunks.txt\n"
+    echo -e "For the readable piece smoke test, fetch pieces.txt and then run:"
+    echo -e "  cat peerC_export/pieces.txt\n"
 }
 
 case "$1" in

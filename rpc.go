@@ -33,8 +33,7 @@ type WhohasReply struct {
 }
 
 type FetchArgs struct {
-	CID    string
-	PeerID string
+	CID string
 }
 
 type FetchReply struct {
@@ -82,8 +81,8 @@ func (c *Client) Whohas(cid string) ([]ProviderInfo, error) {
 	return reply.Providers, err
 }
 
-func (c *Client) Fetch(cid, peerID string) (FetchReply, error) {
-	args := &FetchArgs{CID: cid, PeerID: peerID}
+func (c *Client) Fetch(cid string) (FetchReply, error) {
+	args := &FetchArgs{CID: cid}
 	var reply FetchReply
 	err := c.rpcClient.Call("P2PFSAPI.Fetch", args, &reply)
 	return reply, err
@@ -124,7 +123,7 @@ func (api *P2PFSAPI) Fetch(args *FetchArgs, reply *FetchReply) error {
 	status := func(format string, args ...any) {
 		reply.Events = append(reply.Events, fmt.Sprintf(format, args...))
 	}
-	err := api.node.doFetchWithStatus(args.CID, args.PeerID, status)
+	err := api.node.doFetchWithStatus(args.CID, status)
 	if err == nil {
 		reply.Success = true
 	}

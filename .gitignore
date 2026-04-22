@@ -23,6 +23,7 @@ go.work.sum
 
 # p2pfs specific ignores
 p2pfs
+.gocache/
 files_to_serve/
 peerA_export/
 peerB_export/

@@ -10,12 +10,12 @@ To run the local RPC demo (which spins up Peer A, Peer B, and Peer C, and genera
 ./demo/rpc_demo.sh start
 ```
 
-Watch the terminal as it starts the daemons. Once it completes, first list a remote peer to see the CID for `foo.txt`, then use that CID from Peer C.
+Watch the terminal as it starts the daemons. Once it completes, first list a remote peer to see the manifest CID for `foo.txt`, then use that manifest CID from Peer C.
 
 ```bash
 ./p2pfs list   --rpc /tmp/p2pfsC.sock --peer <REMOTE_MULTIADDR>
-./p2pfs whohas --rpc /tmp/p2pfsC.sock <CID>
-./p2pfs fetch  --rpc /tmp/p2pfsC.sock <CID>
+./p2pfs whohas --rpc /tmp/p2pfsC.sock <MANIFEST_CID>
+./p2pfs fetch  --rpc /tmp/p2pfsC.sock <MANIFEST_CID>
 cat peerC_export/foo.txt
 ```
 
@@ -101,7 +101,7 @@ peerB> files
 **3. Fetch from Peer C**
 
 ```shell
-peerC> whohas <CID>
-peerC> fetch <CID> peerB
+peerC> whohas <MANIFEST_CID>
+peerC> fetch <MANIFEST_CID> peerB
 peerC> cat ~/my_files/foo.txt
 ```

@@ -11,7 +11,7 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
-// the DHT APIs that can be used by the app
+// DHT APIs
 type DHTNode interface {
 	Bootstrap(ctx context.Context) error
 	Provide(ctx context.Context, cidStr string, announce bool) error
@@ -19,7 +19,7 @@ type DHTNode interface {
 	Close() error
 }
 
-// wrapper around the actual DHT object
+// Wrapper around the actual DHT object
 type KadDHT struct {
 	inner *dht.IpfsDHT
 }
@@ -50,8 +50,7 @@ func (k *KadDHT) Bootstrap(ctx context.Context) error {
 	return k.inner.Bootstrap(ctx)
 }
 
-// if Peer A has foo.txt whose CID is X, Peer A calls Provide(X, true)
-// this means Peer A is publishing a provider record into the DHT
+// If Peer A participates in the swarm for manifest X, Peer A calls Provide(X, true).
 func (k *KadDHT) Provide(ctx context.Context, cidStr string, announce bool) error {
 	parsed, err := cid.Parse(cidStr)
 	if err != nil {
@@ -60,8 +59,7 @@ func (k *KadDHT) Provide(ctx context.Context, cidStr string, announce bool) erro
 	return k.inner.Provide(ctx, parsed, announce)
 }
 
-// if Peer B wants file X (file that it does not own),
-// it calls FindProviders(X)
+// If Peer B wants manifest X, it calls FindProviders(X) to discover swarm peers.
 func (k *KadDHT) FindProviders(ctx context.Context, cidStr string, limit int) ([]peer.AddrInfo, error) {
 	parsed, err := cid.Parse(cidStr)
 	if err != nil {

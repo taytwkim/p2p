@@ -4,27 +4,40 @@ A small working prototype of a P2P file sharing network.
 
 ## Overview
 
-The network operates on two primary protocols:
+The network operates on two primary peer protocols:
 
 - **Transfer Protocol (`/p2pfs/get/1.0.0`)**: Stream-based protocol handling file downloads.
 
-- **Index Protocol (`/p2pfs/index/1.0.0`)**: Stream-based request protocol allowing peers to manually verify what files a target peer is serving.
+- **Index Protocol (`/p2pfs/index/1.0.0`)**: Stream-based request protocol for listing files, checking exact objects, and exchanging piece availability bitfields.
 
-It uses `libp2p`'s **Kademlia DHT** for content routing. Downloadable files are identified by manifest CIDs, and every chunk is identified by a CID derived from its raw bytes.
+It uses `libp2p`'s **Kademlia DHT** for swarm discovery. A downloadable file is identified by its manifest CID, and that same manifest CID acts as the file's swarm identifier. Every piece is still identified by a CID derived from its raw bytes, but piece ownership is exchanged directly between peers instead of being looked up through the DHT one piece at a time.
 
-Nodes periodically scan their local export directory and register themselves as providers for newly discovered manifests and chunks, letting other peers locate content on demand.
+Nodes periodically scan their local export directory and register themselves as providers for newly discovered manifests. Other peers use those manifest provider records to find swarm participants, ask each participant for a piece availability bitfield, and then fetch pieces directly from selected peers.
 
-## Chunked Files
+Peers also participate while a download is still in progress. Once a peer has verified a manifest, it joins that manifest swarm; each verified piece immediately updates the peer's availability bitfield and can be served to other peers.
+
+## Swarms and Pieces
 
 Each user-visible file is represented by:
 
 - a **file CID**, computed from the complete file bytes
-- one or more **chunk CIDs**, computed from fixed-size byte ranges
-- a **manifest CID**, computed from a JSON manifest that names the file and lists its chunks in order
+- one or more **piece CIDs**, computed from fixed-size byte ranges
+- a **manifest CID**, computed from a JSON manifest that names the file and lists its pieces in order
 
-The manifest CID is the CID to share and fetch. Fetching a manifest downloads the manifest JSON, downloads its chunks in parallel, verifies each chunk, reconstructs the file, and verifies the final file CID stored inside the manifest.
+The manifest CID is the CID to share and fetch. Fetching a manifest downloads the manifest JSON, downloads its pieces in parallel, verifies each piece, reconstructs the file, and verifies the final file CID stored inside the manifest.
 
-For the current demo-friendly implementation, the chunk size is intentionally small: 5 bytes. A file containing:
+During fetch, peers exchange a prototype bitfield over the Index protocol:
+
+```json
+{
+  "manifestCid": "bafy...",
+  "availability": [true, false, true]
+}
+```
+
+Each boolean position corresponds to the piece at the same index in the manifest. For example, `[true, false, true]` means the peer has pieces `0` and `2`, but not piece `1`.
+
+For the current demo-friendly implementation, the piece size is intentionally small: 5 bytes. A file containing:
 
 ```text
 AAAA
@@ -32,7 +45,7 @@ BBBB
 CCCC
 ```
 
-is split into three chunks: `AAAA\n`, `BBBB\n`, and `CCCC\n`.
+is split into three pieces: `AAAA\n`, `BBBB\n`, and `CCCC\n`.
 
 ## Getting Started
 
@@ -67,7 +80,7 @@ To join an existing network, add `--bootstrap`:
 - `help`: Show available shell commands.
 - `id`: Show this node's peer ID and listen addresses.
 - `files`: Show local files discovered in `export_dir`.
-- `whohas <cid>`: Query the DHT for peers that provide a CID.
+- `whohas <manifest-cid>`: Query the DHT for peers participating in a manifest swarm.
 - `fetch <manifest-cid> [peer|alias]`: Download a file by manifest CID, optionally from a specific peer.
 - `list <multiaddr|alias>`: Ask a specific peer for the files it is serving.
 - `alias <name> <target>`: Save a short alias for a peer ID or full multiaddr.
@@ -103,10 +116,10 @@ To bootstrap a new daemon, pass a comma-separated list of known `/ip4/.../p2p/<P
 
 Once the daemon is up and connected to the DHT through its bootstrap peers, control it with the CLI:
 
-- `whohas`: Ask the local daemon to query the DHT for peers that provide a specific CID.
+- `whohas`: Ask the local daemon to query the DHT for peers participating in a manifest swarm.
 
 ```bash
-./p2pfs whohas <CID>
+./p2pfs whohas <MANIFEST_CID>
 ```
 
 - `fetch`: Tell daemon to download a file by manifest CID into its local `export_dir`.
