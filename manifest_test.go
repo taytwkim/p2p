@@ -11,33 +11,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-/*
- * This file contains small unit tests for the manifest-related features
- *
- * 1. TestBuildManifestForReadablePieces
- * 		Builds a manifest from a file and checks that the pieces, offsets,
- * 		sizes, and CIDs are correct.
- *
- * 2. TestUpdateLocalObjectsIndexesManifestAndPieces
- * 		Tests how a node scans its local directory, writes a manifest,
- * 		and indexes both the manifest and its pieces as servable objects.
- *
- * 3. TestUpdateLocalObjectsAdvertisesOnlyManifestSwarms
- * 		Checks that local object scanning advertises only the manifest CID
- * 		into the DHT, not every individual piece CID.
- *
- * 4. TestAvailabilityForManifestReportsPieceBitfield
- * 		Checks that piece availability for a manifest is reported as a
- * 		boolean list, where each entry says whether that piece is present.
- *
- * 5. TestPartialDownloadSurvivesLocalObjectRescan
- * 		Checks that when a file has been partially downloaded, the pieces we
- * 		already have appear in ServedObjects after updateLocalObjects().
- *
- * 6. TestFinishPieceFetchReconstructsFromCachedPieces
- * 		Tests reconstructing the original file from the downloaded and cached pieces.
- */
-
 // dummy DHT and dummy DHT operations used for testing
 type fakeDHT struct{}
 
@@ -62,8 +35,8 @@ func (r *recordingDHT) FindProviders(context.Context, string, int) ([]peer.AddrI
 }
 func (r *recordingDHT) Close() error { return nil }
 
-// Create a small test file with exactly 15 bytes "AAAA\nBBBB\nCCCC\n".
-// Check that the manifest splits it into three pieces and generate expected CIDs
+// Verifies that manifest construction splits a readable test file into the
+// expected pieces and hashes both the manifest and each piece correctly.
 func TestBuildManifestForReadablePieces(t *testing.T) {
 	dir := t.TempDir() // Create a temporary folder for this test.
 	path := filepath.Join(dir, "letters.txt")
@@ -116,9 +89,8 @@ func TestBuildManifestForReadablePieces(t *testing.T) {
 	}
 }
 
-// Create a small test file with exactly 15 bytes "AAAA\nBBBB\nCCCC\n".
-// Start a test node and confirm that it correctly scans the local directory
-// and creates the expected manifest and pieces.
+// Verifies that a local rescan indexes one complete file into one manifest
+// record plus the expected set of piece records.
 func TestUpdateLocalObjectsIndexesManifestAndPieces(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "letters.txt")
@@ -162,8 +134,8 @@ func TestUpdateLocalObjectsIndexesManifestAndPieces(t *testing.T) {
 	}
 }
 
-// Tests that only the manifest CID is advertised to the DHT
-// Added to make sure we're not advertising individual pieces anymore
+// Verifies that local scanning advertises only the manifest CID to the DHT
+// rather than every piece CID derived from that file.
 func TestUpdateLocalObjectsAdvertisesOnlyManifestSwarms(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "letters.txt")
@@ -206,6 +178,8 @@ func TestUpdateLocalObjectsAdvertisesOnlyManifestSwarms(t *testing.T) {
 	}
 }
 
+// Verifies that per-manifest availability reports only the pieces already
+// marked present in DownloadState, preserving their manifest order.
 func TestAvailabilityForManifestReportsPieceBitfield(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "letters.txt")
@@ -247,7 +221,8 @@ func TestAvailabilityForManifestReportsPieceBitfield(t *testing.T) {
 	}
 }
 
-// Tests that, during a partial download, already-downloaded pieces remain visible in ServedObjects after a local rescan.
+// Verifies that a local rescan preserves piece availability for an in-progress
+// download instead of dropping already cached pieces from ServedObjects.
 func TestPartialDownloadSurvivesLocalObjectRescan(t *testing.T) {
 	sourceDir := t.TempDir()
 	sourcePath := filepath.Join(sourceDir, "letters.txt")
@@ -306,7 +281,8 @@ func TestPartialDownloadSurvivesLocalObjectRescan(t *testing.T) {
 	}
 }
 
-// Tests reconstructing the original file from the downloaded and cached pieces
+// Verifies that once all piece bytes are cached locally, fetchFile can
+// reconstruct and verify the final output file from those cached pieces.
 func TestFinishPieceFetchReconstructsFromCachedPieces(t *testing.T) {
 	// Create a source file
 	sourceDir := t.TempDir()

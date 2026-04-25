@@ -18,7 +18,7 @@ import (
 )
 
 /*
- * We organize local contents (files, manifests, and pieces) in the following way.
+ * We organize local contents (files, manifests, and pieces) as follows.
  *
  * 		1. CompleteFiles
  *    		- Tracks files that have been fully downloaded and available in the export directory.
@@ -94,6 +94,18 @@ type FileDownloadState struct {
 	ManifestPath string
 	ManifestSize int64
 	Have         []bool
+	PeerStats    map[peer.ID]*PeerState // peerID -> PeerState
+}
+
+// PeerState stores per-manifest observations and future choke-related flags.
+type PeerState struct {
+	DownloadRate float64
+	UploadRate   float64
+	SamplesDown  int
+	SamplesUp    int
+	Choked       bool
+	Interested   bool
+	LastUnchoke  time.Time
 }
 
 // Node is a p2p daemon
@@ -398,6 +410,7 @@ func (n *Node) startDownloadState(manifestCID string, manifest *Manifest, manife
 			ManifestPath: manifestPath,
 			ManifestSize: manifestSize,
 			Have:         make([]bool, len(manifest.Pieces)),
+			PeerStats:    make(map[peer.ID]*PeerState),
 		}
 		n.DownloadState[manifestCID] = state
 	} else {
@@ -406,6 +419,9 @@ func (n *Node) startDownloadState(manifestCID string, manifest *Manifest, manife
 		state.ManifestSize = manifestSize
 		if len(state.Have) != len(manifest.Pieces) {
 			state.Have = make([]bool, len(manifest.Pieces))
+		}
+		if state.PeerStats == nil {
+			state.PeerStats = make(map[peer.ID]*PeerState)
 		}
 	}
 	n.rebuildServedObjectsLocked()
@@ -432,6 +448,28 @@ func (n *Node) clearDownloadState(manifestCID string) {
 	delete(n.DownloadState, manifestCID)
 	n.rebuildServedObjectsLocked()
 	n.stateLock.Unlock()
+}
+
+// ensurePeerStateExists creates the per-manifest PeerStats entry for one peer
+// if it is missing. This lets selection treat the peer as known-but-unmeasured.
+func (n *Node) ensurePeerStateExists(manifestCID string, peerID peer.ID) {
+	if peerID == "" {
+		return
+	}
+
+	n.stateLock.Lock()
+	defer n.stateLock.Unlock()
+
+	state := n.DownloadState[manifestCID]
+	if state == nil {
+		return
+	}
+	if state.PeerStats == nil {
+		state.PeerStats = make(map[peer.ID]*PeerState)
+	}
+	if _, exists := state.PeerStats[peerID]; !exists {
+		state.PeerStats[peerID] = &PeerState{}
+	}
 }
 
 // helper that creates .tinytorrent/manifests and .tinytorrent/pieces
