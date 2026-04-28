@@ -1,6 +1,6 @@
-const idlePollIntervalMs = 2000;
-const activePollIntervalMs = 500;
-const transferPollIntervalMs = 150;
+const defaultIdlePollIntervalMs = 2000;
+const defaultActivePollIntervalMs = 500;
+const defaultTransferPollIntervalMs = 150;
 
 const uiState = {
   dashboard: null,
@@ -315,8 +315,20 @@ function hasLiveTransfer() {
   return Boolean(uiState.dashboard?.activeTransfer) || uiState.isFetching.size > 0;
 }
 
+function idlePollIntervalMs() {
+  return uiState.dashboard?.config?.idlePollMs || defaultIdlePollIntervalMs;
+}
+
+function activePollIntervalMs() {
+  return uiState.dashboard?.config?.activePollMs || defaultActivePollIntervalMs;
+}
+
+function transferPollIntervalMs() {
+  return uiState.dashboard?.config?.transferPollMs || defaultTransferPollIntervalMs;
+}
+
 function currentPollInterval() {
-  return hasLiveTransfer() ? activePollIntervalMs : idlePollIntervalMs;
+  return hasLiveTransfer() ? activePollIntervalMs() : idlePollIntervalMs();
 }
 
 function scheduleNextPoll(delay = currentPollInterval()) {
@@ -329,7 +341,7 @@ function scheduleNextPoll(delay = currentPollInterval()) {
   uiState.pollTimer = setTimeout(refreshState, delay);
 }
 
-function scheduleNextTransferPoll(delay = transferPollIntervalMs) {
+function scheduleNextTransferPoll(delay = transferPollIntervalMs()) {
   if (!uiState.backendReady) {
     return;
   }
@@ -348,7 +360,7 @@ async function refreshTransferState() {
     return;
   }
   if (uiState.suspendPolling || !hasLiveTransfer()) {
-    scheduleNextTransferPoll();
+    scheduleNextTransferPoll(idlePollIntervalMs());
     return;
   }
   try {
@@ -370,7 +382,7 @@ async function refreshState() {
     return;
   }
   if (uiState.suspendPolling) {
-    scheduleNextPoll(idlePollIntervalMs);
+    scheduleNextPoll(idlePollIntervalMs());
     return;
   }
   try {
@@ -398,7 +410,7 @@ async function startFetch(manifestCid) {
 
   uiState.isFetching.add(manifestCid);
   renderAll();
-  scheduleNextPoll(activePollIntervalMs);
+  scheduleNextPoll(activePollIntervalMs());
   scheduleNextTransferPoll(0);
   try {
     await apiFetch("/api/fetch", {

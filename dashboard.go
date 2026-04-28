@@ -99,9 +99,16 @@ type dashboardTransfer struct {
 
 type dashboardStateResponse struct {
 	Summary        dashboardSummary    `json:"summary"`
+	Config         dashboardConfig     `json:"config"`
 	Peers          []dashboardPeer     `json:"peers"`
 	Files          []dashboardFile     `json:"files"`
 	ActiveTransfer *dashboardTransfer  `json:"activeTransfer,omitempty"`
+}
+
+type dashboardConfig struct {
+	IdlePollMs     int `json:"idlePollMs"`
+	ActivePollMs   int `json:"activePollMs"`
+	TransferPollMs int `json:"transferPollMs"`
 }
 
 type fetchRequest struct {
@@ -120,17 +127,17 @@ type peerRuntimeState struct {
 func runDashboard(args []string) {
 	fs := flag.NewFlagSet("dashboard", flag.ExitOnError)
 	addr := fs.String("addr", "127.0.0.1:8080", "HTTP listen address")
-	uiDir := fs.String("ui_dir", "./demo/local/ui", "Static dashboard UI directory")
 	fs.Parse(args)
 
 	repoRoot, err := os.Getwd()
 	if err != nil {
 		log.Fatalf("Failed to determine working directory: %v", err)
 	}
+	localCfg := loadLocalDemoConfig(repoRoot)
 
 	server := &dashboardServer{
 		repoRoot: repoRoot,
-		uiDir:    *uiDir,
+		uiDir:    filepath.Join(repoRoot, localCfg.DashboardUIRel),
 		peers: []dashboardPeerConfig{
 			{ID: "peerA", Name: "Peer A", Socket: "/tmp/tinytorrentA.sock", ExportDir: filepath.Join(repoRoot, "peerA_export"), LogPath: filepath.Join(repoRoot, "peerA.log")},
 			{ID: "peerB", Name: "Peer B", Socket: "/tmp/tinytorrentB.sock", ExportDir: filepath.Join(repoRoot, "peerB_export"), LogPath: filepath.Join(repoRoot, "peerB.log")},
@@ -359,6 +366,11 @@ func (s *dashboardServer) buildState() (dashboardStateResponse, error) {
 
 	state := dashboardStateResponse{
 		Summary: summary,
+		Config: dashboardConfig{
+			IdlePollMs:     currentLocalDemoConfig().DashboardIdlePollMs,
+			ActivePollMs:   currentLocalDemoConfig().DashboardActivePollMs,
+			TransferPollMs: currentLocalDemoConfig().DashboardTransferPollMs,
+		},
 		Peers:   peers,
 		Files:   files,
 	}

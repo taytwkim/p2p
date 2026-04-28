@@ -11,8 +11,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-const peerDownloadRateAlpha = 0.8
-
 var (
 	errPeerChoked         = errors.New("peer is choking us")
 	errAllProvidersChoked = errors.New("all providers are currently choking us")
@@ -184,7 +182,8 @@ func (n *Node) recordPeerDownloadSample(manifestCID string, peerID peer.ID, byte
 	if peerState.SamplesDown == 0 {
 		peerState.DownloadRate = sampleRate
 	} else {
-		peerState.DownloadRate = peerDownloadRateAlpha*sampleRate + (1-peerDownloadRateAlpha)*peerState.DownloadRate
+		alpha := currentSystemConfig().PeerDownloadRateAlpha
+		peerState.DownloadRate = alpha*sampleRate + (1-alpha)*peerState.DownloadRate
 	}
 	peerState.SamplesDown++
 }

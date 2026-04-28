@@ -188,7 +188,8 @@ func TestRecordPeerDownloadSampleUsesMovingAverage(t *testing.T) {
 
 	node.recordPeerDownloadSample(manifestCID, peerID, 200, time.Second)
 	second := node.ManifestPeerState[manifestCID][peerID]
-	want := peerDownloadRateAlpha*200 + (1-peerDownloadRateAlpha)*100
+	alpha := currentSystemConfig().PeerDownloadRateAlpha
+	want := alpha*200 + (1-alpha)*100
 	if second.SamplesDown != 2 || math.Abs(second.DownloadRate-want) > 0.0001 {
 		t.Fatalf("second sample = %+v, want rate=%f samples=2", second, want)
 	}
@@ -232,8 +233,9 @@ func TestReevaluateManifestChokingUsesOptimisticSlot(t *testing.T) {
 			optimistic++
 		}
 	}
-	if unchoked != maxUnchokedPeersPerManifest {
-		t.Fatalf("unchoked peers = %d, want %d", unchoked, maxUnchokedPeersPerManifest)
+	maxUnchoked := currentSystemConfig().MaxUnchokedPeersPerManifest
+	if unchoked != maxUnchoked {
+		t.Fatalf("unchoked peers = %d, want %d", unchoked, maxUnchoked)
 	}
 	if optimistic != 1 {
 		t.Fatalf("optimistic slots = %d, want 1", optimistic)

@@ -8,20 +8,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-const (
-	// chokeReevaluationInterval currently sets two related timers:
-	// 1. how often we recompute the manifest's unchoked set, and
-	// 2. cooldown for a peer after it chokes one of our piece requests.
-	chokeReevaluationInterval = 10 * time.Second
-
-	// Rotates optimistic unchoke every third reevaluation:
-	// reevaluate at 10s, 20s, 30s, then pick a new optimistic peer.
-	optimisticUnchokeRotationRounds = 3
-
-	maxUnchokedPeersPerManifest = 4
-	optimisticUnchokeSlots      = 1
-)
-
 // PeerState stores per-manifest observations and choke-related flags for one peer.
 type PeerState struct {
 	DownloadRate   float64
@@ -71,7 +57,7 @@ func (n *Node) isManifestCompleteLocked(manifestCID string) bool {
 // runChokeReevaluationLoop periodically recomputes which known peers are
 // unchoked for each manifest we currently track.
 func (n *Node) runChokeReevaluationLoop() {
-	ticker := time.NewTicker(chokeReevaluationInterval)
+	ticker := time.NewTicker(currentSystemConfig().ChokeReevaluationInterval)
 	defer ticker.Stop()
 
 	for {
@@ -120,7 +106,8 @@ func (n *Node) reevaluateManifestChokingForLocked(manifestCID string, now time.T
 	n.RechokeRounds[manifestCID]++
 	rechokeRound := n.RechokeRounds[manifestCID]
 
-	regularSlots := maxUnchokedPeersPerManifest - optimisticUnchokeSlots
+	optimisticSlots := currentSystemConfig().OptimisticUnchokeSlots
+	regularSlots := currentSystemConfig().MaxUnchokedPeersPerManifest - optimisticSlots
 	if regularSlots < 0 {
 		regularSlots = 0
 	}
@@ -134,7 +121,7 @@ func (n *Node) reevaluateManifestChokingForLocked(manifestCID string, now time.T
 		unchoked[peerID] = struct{}{}
 	}
 
-	if optimisticUnchokeSlots > 0 {
+	if optimisticSlots > 0 {
 		remaining := make([]peer.ID, 0, len(orderedPeers))
 		for _, peerID := range orderedPeers {
 			if _, alreadyChosen := unchoked[peerID]; alreadyChosen {
@@ -159,7 +146,8 @@ func (n *Node) reevaluateManifestChokingForLocked(manifestCID string, now time.T
 // reevaluation round, unless that peer is no longer eligible for the extra slot.
 func (n *Node) chooseOptimisticPeer(manifestCID string, remaining []peer.ID, rechokeRound int) peer.ID {
 	current := n.OptimisticPeers[manifestCID]
-	shouldRotate := rechokeRound == 1 || rechokeRound%optimisticUnchokeRotationRounds == 1
+	rotationRounds := currentSystemConfig().OptimisticUnchokeRotationRounds
+	shouldRotate := rechokeRound == 1 || rechokeRound%rotationRounds == 1
 
 	if !shouldRotate {
 		for _, peerID := range remaining {
@@ -265,7 +253,8 @@ func (n *Node) recordPeerUploadSample(manifestCID string, peerID peer.ID, bytes 
 	if peerState.SamplesUp == 0 {
 		peerState.UploadRate = sampleRate
 	} else {
-		peerState.UploadRate = peerDownloadRateAlpha*sampleRate + (1-peerDownloadRateAlpha)*peerState.UploadRate
+		alpha := currentSystemConfig().PeerDownloadRateAlpha
+		peerState.UploadRate = alpha*sampleRate + (1-alpha)*peerState.UploadRate
 	}
 	peerState.SamplesUp++
 }
@@ -293,7 +282,7 @@ func (n *Node) markPeerChokingUs(manifestCID string, peerID peer.ID) {
 		n.ManifestPeerState[manifestCID][peerID] = peerState
 	}
 	peerState.RemoteChokesUs = true
-	peerState.ChokedUntil = time.Now().Add(chokeReevaluationInterval)
+	peerState.ChokedUntil = time.Now().Add(currentSystemConfig().ChokeReevaluationInterval)
 }
 
 // nextChokeRetryDelay chooses how long the downloader should wait before it
@@ -305,7 +294,7 @@ func (n *Node) nextChokeRetryDelay(manifestCID string, pieces []ManifestPiece, p
 	defer n.stateLock.RUnlock()
 
 	now := time.Now()
-	delay := chokeReevaluationInterval
+	delay := currentSystemConfig().ChokeReevaluationInterval
 	peerStates := n.ManifestPeerState[manifestCID]
 	for _, piece := range pieces {
 		for _, provider := range pieceSources[piece.CID] {

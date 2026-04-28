@@ -4,13 +4,16 @@ A small prototype of a P2P file sharing system that implements the core ideas of
 
 ## Overview
 
-* Files chunked and downloaded in smaller pieces.
-* Kademlia DHT integration for peer (provider) discovery.
-* Piece and provider selection layers that download rarest pieces first from peers with best observed download rates.
-* Incentivization based on choking.
-* Hashing for file integrity.
+* **Chunked Transfers**: Files are split into smaller pieces so peers can download/upload data incrementally.
+* **Peer Discovery**: Kademlia DHT integration allows peers to discover which peers can provide a requested file.
+* **Download Scheduling**: Rarest-first piece selection policy improves availability.
+* **Provider Selection**: Among available providers, peers prefer providers with the best observed download rates.
+* **Choking-Based Incentives**: Peers limit uploads through choking to encourage reciprocal sharing and prevent free-riding.
+* **File Integrity**: Hashing verifies downloaded data and helps detect corrupted pieces.
 
-## Getting Started
+## Demo
+
+## Usage
 
 Build the binary:
 

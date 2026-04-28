@@ -182,7 +182,7 @@ func (s *shellSession) runCommand(line string) error {
 		if len(args) != 2 {
 			return fmt.Errorf("usage: whohas <manifest-cid>")
 		}
-		providers, err := s.node.DHT.FindProviders(context.Background(), args[1], 20)
+		providers, err := s.node.DHT.FindProviders(context.Background(), args[1], currentSystemConfig().ProviderQueryLimit)
 		if err != nil {
 			return err
 		}

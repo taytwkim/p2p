@@ -94,7 +94,10 @@ func TestBuildManifestForReadablePieces(t *testing.T) {
 func TestUpdateLocalObjectsIndexesManifestAndPieces(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "letters.txt")
-	if err := os.WriteFile(path, []byte("AAAA\nBBBB\nCCCC\n"), 0644); err != nil {
+	pieceSize := currentSystemConfig().DefaultPieceSizeBytes
+	data := append(bytes.Repeat([]byte("A"), int(pieceSize)), bytes.Repeat([]byte("B"), int(pieceSize))...)
+	data = append(data, bytes.Repeat([]byte("C"), int(pieceSize))...)
+	if err := os.WriteFile(path, data, 0644); err != nil {
 		t.Fatal(err)
 	}
 

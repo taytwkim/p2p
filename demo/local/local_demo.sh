@@ -4,8 +4,8 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+CONFIG_FILE="$REPO_ROOT/config.env"
 BINARY="$REPO_ROOT/tinytorrent"
-DEMO_TEXT_SOURCE="$REPO_ROOT/demo/local/alice.txt"
 PEER_A_EXPORT="$REPO_ROOT/peerA_export"
 PEER_B_EXPORT="$REPO_ROOT/peerB_export"
 PEER_C_EXPORT="$REPO_ROOT/peerC_export"
@@ -17,6 +17,15 @@ PEER_C_LOG="$REPO_ROOT/peerC.log"
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+
+if [ -f "$CONFIG_FILE" ]; then
+    set -a
+    source "$CONFIG_FILE"
+    set +a
+fi
+
+DEMO_TEXT_SOURCE="$REPO_ROOT/${SEED_TEXT_SOURCE_REL:-demo/local/alice.txt}"
+DEMO_TEXT_DEST_NAME="${SEED_TEXT_DEST_NAME:-alice.txt}"
 
 # Function to clear old state
 clean() {
@@ -37,7 +46,7 @@ setup() {
     echo -e "${BLUE}Setting up directories...${NC}"
     mkdir -p "$PEER_A_EXPORT" "$PEER_B_EXPORT" "$PEER_C_EXPORT"
     echo "Hello from Peer A!" > "$PEER_A_EXPORT/foo.txt"
-    cp "$DEMO_TEXT_SOURCE" "$PEER_A_EXPORT/alice.txt"
+    cp "$DEMO_TEXT_SOURCE" "$PEER_A_EXPORT/$DEMO_TEXT_DEST_NAME"
 
     echo -e "${GREEN}Starting Peer A (Seed)...${NC}"
     "$BINARY" daemon -listen /ip4/127.0.0.1/tcp/4001 -export_dir "$PEER_A_EXPORT" -rpc /tmp/tinytorrentA.sock > "$PEER_A_LOG" 2>&1 &
@@ -57,13 +66,13 @@ setup() {
     "$BINARY" daemon -listen /ip4/127.0.0.1/tcp/4003 -export_dir "$PEER_C_EXPORT" -rpc /tmp/tinytorrentC.sock -bootstrap "$B_ADDR" > "$PEER_C_LOG" 2>&1 &
     
     echo -e "\n${BLUE}All peers started! Wait a few seconds for the DHT routing tables to warm up (~5-10s)...${NC}"
-    echo -e "You can now run commands against Peer C to inspect files, find the manifest CID for foo.txt or alice.txt, and fetch it:"
+    echo -e "You can now run commands against Peer C to inspect files, find the manifest CID for foo.txt or $DEMO_TEXT_DEST_NAME, and fetch it:"
     echo -e "  ./tinytorrent list   --rpc /tmp/tinytorrentC.sock --peer <REMOTE_MULTIADDR>"
     echo -e "  ./tinytorrent whohas --rpc /tmp/tinytorrentC.sock <MANIFEST_CID>"
     echo -e "  ./tinytorrent fetch  --rpc /tmp/tinytorrentC.sock <MANIFEST_CID>"
     echo -e "  cat peerC_export/foo.txt\n"
-    echo -e "For the readable text demo, fetch alice.txt and then run:"
-    echo -e "  cat peerC_export/alice.txt\n"
+    echo -e "For the readable text demo, fetch $DEMO_TEXT_DEST_NAME and then run:"
+    echo -e "  cat peerC_export/$DEMO_TEXT_DEST_NAME\n"
 }
 
 case "$1" in

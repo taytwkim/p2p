@@ -148,7 +148,7 @@ type TinyTorrentAPI struct {
 }
 
 func (api *TinyTorrentAPI) Whohas(args *WhohasArgs, reply *WhohasReply) error {
-	peers, err := api.node.DHT.FindProviders(context.Background(), args.CID, 20)
+	peers, err := api.node.DHT.FindProviders(context.Background(), args.CID, currentSystemConfig().ProviderQueryLimit)
 	if err != nil {
 		return err
 	}

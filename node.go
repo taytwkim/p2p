@@ -283,7 +283,7 @@ func (n *Node) updateLocalObjects() {
 		}
 		path := filepath.Join(n.ExportDir, f.Name())
 
-		manifest, manifestBytes, manifestCID, err := BuildManifest(path, f.Name(), defaultPieceSize)
+		manifest, manifestBytes, manifestCID, err := BuildManifest(path, f.Name(), currentSystemConfig().DefaultPieceSizeBytes)
 		if err != nil {
 			log.Printf("Error building manifest for %s: %v", f.Name(), err)
 			continue

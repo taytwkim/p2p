@@ -58,8 +58,6 @@ import (
  *      a normal complete local file.
  */
 
-const maxNumDownloadWorkers = 4
-
 // doFetch downloads a file starting from its manifest CID.
 // It is the simple entrypoint used when the caller does not need progress updates.
 func (n *Node) doFetch(manifestCID string) error {
@@ -246,7 +244,7 @@ func (n *Node) fetchMissingPieces(manifestCID string, manifest *Manifest, status
 
 		// Use a bounded worker count so one fetch round does not explode into
 		// unbounded concurrent piece requests.
-		numWorkers := maxNumDownloadWorkers
+		numWorkers := currentSystemConfig().MaxDownloadWorkers
 		if len(missingPieces) < numWorkers {
 			numWorkers = len(missingPieces)
 		}
@@ -384,7 +382,7 @@ func (n *Node) findPeersForPieces(manifestCID string, manifest *Manifest, status
 // findPeersWhoHasManifest returns peers that currently claim this manifest and
 // still confirm that they have it when probed directly.
 func (n *Node) findPeersWhoHasManifest(manifestCID string) ([]peer.AddrInfo, error) {
-	providers, err := n.DHT.FindProviders(context.Background(), manifestCID, 20)
+	providers, err := n.DHT.FindProviders(context.Background(), manifestCID, currentSystemConfig().ProviderQueryLimit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query DHT swarm participants: %w", err)
 	}
@@ -521,7 +519,7 @@ func (n *Node) fetchObjectFromPeer(cid string, target peer.ID) ([]byte, Transfer
 // choosePeerForManifest chooses which peer to ask for the manifest itself.
 // If the user did not name a peer, it looks up swarm participants and probes them with HAS first.
 func (n *Node) choosePeerForManifest(manifestCID string) (peer.ID, peer.AddrInfo, error) {
-	providers, err := n.DHT.FindProviders(context.Background(), manifestCID, 20)
+	providers, err := n.DHT.FindProviders(context.Background(), manifestCID, currentSystemConfig().ProviderQueryLimit)
 	if err != nil {
 		return "", peer.AddrInfo{}, fmt.Errorf("failed to query DHT swarm participants: %w", err)
 	}
