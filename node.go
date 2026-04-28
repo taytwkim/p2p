@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -94,6 +95,8 @@ type FileDownloadState struct {
 	ManifestPath string
 	ManifestSize int64
 	Have         []bool
+	InFlight     []bool
+	PieceSources []string
 }
 
 // Node is a p2p daemon
@@ -405,6 +408,8 @@ func (n *Node) startDownloadState(manifestCID string, manifest *Manifest, manife
 			ManifestPath: manifestPath,
 			ManifestSize: manifestSize,
 			Have:         make([]bool, len(manifest.Pieces)),
+			InFlight:     make([]bool, len(manifest.Pieces)),
+			PieceSources: make([]string, len(manifest.Pieces)),
 		}
 		n.DownloadState[manifestCID] = state
 	} else {
@@ -413,6 +418,12 @@ func (n *Node) startDownloadState(manifestCID string, manifest *Manifest, manife
 		state.ManifestSize = manifestSize
 		if len(state.Have) != len(manifest.Pieces) {
 			state.Have = make([]bool, len(manifest.Pieces))
+		}
+		if len(state.InFlight) != len(manifest.Pieces) {
+			state.InFlight = make([]bool, len(manifest.Pieces))
+		}
+		if len(state.PieceSources) != len(manifest.Pieces) {
+			state.PieceSources = make([]string, len(manifest.Pieces))
 		}
 	}
 	if n.ManifestPeerState == nil {
@@ -430,11 +441,39 @@ func (n *Node) startDownloadState(manifestCID string, manifest *Manifest, manife
 
 // updates DownloadState entry by marking a piece as downloaded
 func (n *Node) markPieceAvailable(manifestCID string, piece ManifestPiece) {
+	n.markPieceAvailableFrom(manifestCID, piece, "")
+}
+
+func (n *Node) markPieceAvailableFrom(manifestCID string, piece ManifestPiece, source string) {
 	n.stateLock.Lock()
 	state := n.DownloadState[manifestCID]
 	if state != nil && piece.Index >= 0 && piece.Index < len(state.Have) {
 		state.Have[piece.Index] = true
+		if piece.Index < len(state.InFlight) {
+			state.InFlight[piece.Index] = false
+		}
+		if source != "" && piece.Index < len(state.PieceSources) {
+			state.PieceSources[piece.Index] = source
+		}
 		n.rebuildServedObjectsLocked()
+	}
+	n.stateLock.Unlock()
+}
+
+func (n *Node) markPieceInFlight(manifestCID string, piece ManifestPiece) {
+	n.stateLock.Lock()
+	state := n.DownloadState[manifestCID]
+	if state != nil && piece.Index >= 0 && piece.Index < len(state.InFlight) && !state.Have[piece.Index] {
+		state.InFlight[piece.Index] = true
+	}
+	n.stateLock.Unlock()
+}
+
+func (n *Node) clearPieceInFlight(manifestCID string, piece ManifestPiece) {
+	n.stateLock.Lock()
+	state := n.DownloadState[manifestCID]
+	if state != nil && piece.Index >= 0 && piece.Index < len(state.InFlight) {
+		state.InFlight[piece.Index] = false
 	}
 	n.stateLock.Unlock()
 }
@@ -463,6 +502,91 @@ func manifestStoragePath(exportDir, manifestCID string) string {
 // returns the filepath where a downloaded piece should be cached.
 func pieceStoragePath(exportDir, pieceCID string) string {
 	return filepath.Join(exportDir, ".tinytorrent", "pieces", pieceCID)
+}
+
+func (n *Node) snapshotRPCState() StateReply {
+	reply := StateReply{}
+	if n == nil {
+		return reply
+	}
+	if n.Host != nil {
+		reply.PeerID = n.Host.ID().String()
+		for _, addr := range n.Host.Addrs() {
+			reply.ListenAddrs = append(reply.ListenAddrs, fmt.Sprintf("%s/p2p/%s", addr, n.Host.ID()))
+		}
+		sort.Strings(reply.ListenAddrs)
+	}
+
+	n.stateLock.RLock()
+	for _, object := range n.ServedObjects {
+		if object.Kind == ObjectPiece {
+			reply.AvailablePieceCount++
+		}
+	}
+
+	reply.Files = make([]IndexFile, 0, len(n.CompleteFiles))
+	for _, file := range n.CompleteFiles {
+		reply.Files = append(reply.Files, IndexFile{
+			CID:         file.ManifestCID,
+			Kind:        string(ObjectManifest),
+			Filename:    file.Manifest.Filename,
+			Size:        file.Manifest.FileSize,
+			ManifestCID: file.ManifestCID,
+			PieceCount:  len(file.Manifest.Pieces),
+		})
+	}
+
+	reply.Downloads = make([]DownloadProgress, 0, len(n.DownloadState))
+	for manifestCID, state := range n.DownloadState {
+		if state == nil || state.Manifest == nil {
+			continue
+		}
+
+		progress := DownloadProgress{
+			ManifestCID: manifestCID,
+			Filename:    state.Manifest.Filename,
+			FileSize:    state.Manifest.FileSize,
+			PieceCount:  len(state.Manifest.Pieces),
+			Pieces:      make([]PieceProgress, 0, len(state.Manifest.Pieces)),
+		}
+
+		for i, piece := range state.Manifest.Pieces {
+			retrieved := i < len(state.Have) && state.Have[i]
+			inFlight := i < len(state.InFlight) && state.InFlight[i]
+			source := ""
+			if i < len(state.PieceSources) {
+				source = state.PieceSources[i]
+			}
+			if retrieved {
+				progress.CompletedPieces++
+			}
+			progress.Pieces = append(progress.Pieces, PieceProgress{
+				Index:      piece.Index,
+				Size:       piece.Size,
+				Retrieved:  retrieved,
+				InFlight:   inFlight,
+				SourcePeer: source,
+			})
+		}
+
+		reply.Downloads = append(reply.Downloads, progress)
+	}
+	n.stateLock.RUnlock()
+
+	sort.Slice(reply.Files, func(i, j int) bool {
+		if reply.Files[i].Filename != reply.Files[j].Filename {
+			return reply.Files[i].Filename < reply.Files[j].Filename
+		}
+		return reply.Files[i].ManifestCID < reply.Files[j].ManifestCID
+	})
+	sort.Slice(reply.Downloads, func(i, j int) bool {
+		if reply.Downloads[i].Filename != reply.Downloads[j].Filename {
+			return reply.Downloads[i].Filename < reply.Downloads[j].Filename
+		}
+		return reply.Downloads[i].ManifestCID < reply.Downloads[j].ManifestCID
+	})
+
+	return reply
 }
 
 // announces manifest CIDs to the DHT

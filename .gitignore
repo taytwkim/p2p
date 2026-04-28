@@ -34,8 +34,11 @@ peerC_export/
 # macOS
 .DS_Store
 
-# Terraform
+# terraform
 demo/gcp/terraform.tfvars
 demo/gcp/.terraform/
 demo/gcp/terraform.tfstate
 demo/gcp/terraform.tfstate.*
+
+# large files
+demo/local/alice.txt

@@ -41,6 +41,33 @@ type FetchReply struct {
 	Events  []string
 }
 
+type PieceProgress struct {
+	Index      int
+	Size       int64
+	Retrieved  bool
+	InFlight   bool
+	SourcePeer string
+}
+
+type DownloadProgress struct {
+	ManifestCID     string
+	Filename        string
+	FileSize        int64
+	PieceCount      int
+	CompletedPieces int
+	Pieces          []PieceProgress
+}
+
+type StateArgs struct{}
+
+type StateReply struct {
+	PeerID              string
+	ListenAddrs         []string
+	Files               []IndexFile
+	Downloads           []DownloadProgress
+	AvailablePieceCount int
+}
+
 type ListArgs struct {
 	TargetAddr string
 }
@@ -74,6 +101,14 @@ func NewClient(rpcSocket string) *Client {
 	return &Client{rpcClient: c}
 }
 
+func DialClient(rpcSocket string) (*Client, error) {
+	c, err := rpc.DialHTTP("unix", rpcSocket)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{rpcClient: c}, nil
+}
+
 func (c *Client) Whohas(cid string) ([]ProviderInfo, error) {
 	args := &WhohasArgs{CID: cid}
 	var reply WhohasReply
@@ -93,6 +128,13 @@ func (c *Client) List(targetAddr string) ([]IndexFile, error) {
 	var reply ListReply
 	err := c.rpcClient.Call("TinyTorrentAPI.List", args, &reply)
 	return reply.Files, err
+}
+
+func (c *Client) State() (StateReply, error) {
+	args := &StateArgs{}
+	var reply StateReply
+	err := c.rpcClient.Call("TinyTorrentAPI.State", args, &reply)
+	return reply, err
 }
 
 // ============================================================================
@@ -136,6 +178,11 @@ func (api *TinyTorrentAPI) List(args *ListArgs, reply *ListReply) error {
 		reply.Files = files
 	}
 	return err
+}
+
+func (api *TinyTorrentAPI) State(args *StateArgs, reply *StateReply) error {
+	*reply = api.node.snapshotRPCState()
+	return nil
 }
 
 // ============================================================================

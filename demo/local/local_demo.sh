@@ -1,10 +1,11 @@
 #!/bin/bash
 
-# rpc_demo.sh - A script to set up, run, and clean the P2P file sharing demo using daemon + RPC commands.
+# local_demo.sh - A script to set up, run, and clean the local P2P file sharing demo using daemon + RPC commands.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BINARY="$REPO_ROOT/tinytorrent"
+DEMO_TEXT_SOURCE="$REPO_ROOT/demo/local/alice.txt"
 PEER_A_EXPORT="$REPO_ROOT/peerA_export"
 PEER_B_EXPORT="$REPO_ROOT/peerB_export"
 PEER_C_EXPORT="$REPO_ROOT/peerC_export"
@@ -36,7 +37,7 @@ setup() {
     echo -e "${BLUE}Setting up directories...${NC}"
     mkdir -p "$PEER_A_EXPORT" "$PEER_B_EXPORT" "$PEER_C_EXPORT"
     echo "Hello from Peer A!" > "$PEER_A_EXPORT/foo.txt"
-    printf "AAAA\nBBBB\nCCCC\n" > "$PEER_A_EXPORT/pieces.txt"
+    cp "$DEMO_TEXT_SOURCE" "$PEER_A_EXPORT/alice.txt"
 
     echo -e "${GREEN}Starting Peer A (Seed)...${NC}"
     "$BINARY" daemon -listen /ip4/127.0.0.1/tcp/4001 -export_dir "$PEER_A_EXPORT" -rpc /tmp/tinytorrentA.sock > "$PEER_A_LOG" 2>&1 &
@@ -56,13 +57,13 @@ setup() {
     "$BINARY" daemon -listen /ip4/127.0.0.1/tcp/4003 -export_dir "$PEER_C_EXPORT" -rpc /tmp/tinytorrentC.sock -bootstrap "$B_ADDR" > "$PEER_C_LOG" 2>&1 &
     
     echo -e "\n${BLUE}All peers started! Wait a few seconds for the DHT routing tables to warm up (~5-10s)...${NC}"
-    echo -e "You can now run commands against Peer C to inspect files, find the manifest CID for foo.txt or pieces.txt, and fetch it:"
+    echo -e "You can now run commands against Peer C to inspect files, find the manifest CID for foo.txt or alice.txt, and fetch it:"
     echo -e "  ./tinytorrent list   --rpc /tmp/tinytorrentC.sock --peer <REMOTE_MULTIADDR>"
     echo -e "  ./tinytorrent whohas --rpc /tmp/tinytorrentC.sock <MANIFEST_CID>"
     echo -e "  ./tinytorrent fetch  --rpc /tmp/tinytorrentC.sock <MANIFEST_CID>"
     echo -e "  cat peerC_export/foo.txt\n"
-    echo -e "For the readable piece smoke test, fetch pieces.txt and then run:"
-    echo -e "  cat peerC_export/pieces.txt\n"
+    echo -e "For the readable text demo, fetch alice.txt and then run:"
+    echo -e "  cat peerC_export/alice.txt\n"
 }
 
 case "$1" in
@@ -77,7 +78,7 @@ case "$1" in
         setup
         ;;
     *)
-        echo "Usage: ./demo/rpc_demo.sh {start|clean|setup}"
+        echo "Usage: ./demo/local/local_demo.sh {start|clean|setup}"
         echo "  start : Cleans up old state, builds, and starts the 3-peer network"
         echo "  clean : Kills running peers and removes export directories / logs"
         exit 1

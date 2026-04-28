@@ -43,6 +43,8 @@ func main() {
 		runFetch(args)
 	case "list":
 		runList(args)
+	case "dashboard":
+		runDashboard(args)
 	default:
 		fmt.Printf("Unknown command: %s\n", cmd)
 		printUsage()
@@ -58,6 +60,7 @@ func printUsage() {
 	fmt.Println("  whohas  Find peers participating in a manifest swarm")
 	fmt.Println("  fetch   Download a file by manifest CID")
 	fmt.Println("  list    List files served by a peer with filenames and CIDs")
+	fmt.Println("  dashboard  Serve the demo dashboard and bridge it to local RPC daemons")
 }
 
 func runDaemon(args []string) {

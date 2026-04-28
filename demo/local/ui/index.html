@@ -14,14 +14,15 @@
   </head>
   <body>
     <div class="shell">
+      <div class="panel backend-notice" id="backend-notice" hidden></div>
+
       <header class="hero">
         <div class="hero__controls">
           <div class="status-strip" id="status-strip"></div>
-          <div class="hero__actions">
-            <button class="button button--ghost" type="button">Reset Demo</button>
-          </div>
         </div>
       </header>
+
+      <section class="network">
         <div class="peer-grid" id="peer-grid"></div>
       </section>
 
@@ -32,7 +33,6 @@
               <p class="eyebrow">Catalog</p>
               <h3>Available Files</h3>
             </div>
-            <button class="button button--ghost button--small" type="button">Poll files</button>
           </div>
           <div class="file-list" id="file-list"></div>
         </article>
@@ -41,20 +41,29 @@
           <div class="panel__header">
             <div>
               <p class="eyebrow">Transfer Activity</p>
-              <h3>Active transfer</h3>
+              <h3 id="transfer-title">Transfer details</h3>
             </div>
-            <span class="chip chip--live">Live simulation</span>
+            <span class="chip" id="transfer-chip">Idle</span>
           </div>
 
-          <div class="transfer-summary" id="transfer-summary"></div>
-          <div class="piece-legend">
-            <span><i class="piece-swatch piece-swatch--done"></i> Retrieved</span>
-            <span><i class="piece-swatch piece-swatch--active"></i> In flight</span>
-            <span><i class="piece-swatch piece-swatch--idle"></i> Pending</span>
-          </div>
-          <div class="piece-grid" id="piece-grid"></div>
+          <div id="transfer-content"></div>
         </article>
       </section>
+    </div>
+
+    <div class="modal" id="peer-files-modal" hidden>
+      <div class="modal__backdrop" data-close-modal="true"></div>
+      <div class="modal__dialog" role="dialog" aria-modal="true" aria-labelledby="peer-files-title">
+        <div class="modal__header">
+          <div>
+            <p class="eyebrow">Peer Files</p>
+            <h3 id="peer-files-title">Files</h3>
+          </div>
+          <button class="button button--ghost button--small" id="close-peer-files" type="button">Close</button>
+        </div>
+        <div class="modal__meta" id="peer-files-meta"></div>
+        <div class="modal__body" id="peer-files-body"></div>
+      </div>
     </div>
 
     <script src="./app.js"></script>

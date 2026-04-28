@@ -306,7 +306,10 @@ func (n *Node) fetchMissingPieces(manifestCID string, manifest *Manifest, status
 		}
 
 		if !retryBecauseChoked {
-			return nil
+			// A clean round does not necessarily mean we are done anymore.
+			// The random-first bootstrap round intentionally fetches only one piece,
+			// so we loop back, rescan the local cache, and schedule the remaining work.
+			continue
 		}
 
 		// If choking was the only blocker, pause until the earliest relevant
@@ -324,7 +327,7 @@ func (n *Node) findMissingPieces(manifestCID string, pieces []ManifestPiece, sta
 	for _, piece := range pieces {
 		piecePath := pieceStoragePath(n.ExportDir, piece.CID)
 		if cachedCID, err := ComputeCID(piecePath); err == nil && cachedCID == piece.CID {
-			n.markPieceAvailable(manifestCID, piece)
+			n.markPieceAvailableFrom(manifestCID, piece, "Local cache")
 			logFetchDetail("piece %d cached locally", piece.Index)
 			continue
 		}
@@ -431,10 +434,13 @@ func removeDuplicatePieces(pieces []ManifestPiece) []ManifestPiece {
 func (n *Node) fetchPieceFromPeer(manifestCID string, piece ManifestPiece, source peer.ID, status func(format string, args ...any)) error {
 	piecePath := pieceStoragePath(n.ExportDir, piece.CID)
 	if cachedCID, err := ComputeCID(piecePath); err == nil && cachedCID == piece.CID {
-		n.markPieceAvailable(manifestCID, piece)
+		n.markPieceAvailableFrom(manifestCID, piece, "Local cache")
 		logFetchDetail("piece %d cached locally", piece.Index)
 		return nil
 	}
+
+	n.markPieceInFlight(manifestCID, piece)
+	defer n.clearPieceInFlight(manifestCID, piece)
 
 	start := time.Now()
 	data, resp, providerID, err := n.fetchObjectFromPeer(piece.CID, source)
@@ -460,7 +466,7 @@ func (n *Node) fetchPieceFromPeer(manifestCID string, piece ManifestPiece, sourc
 		return err
 	}
 
-	n.markPieceAvailable(manifestCID, piece)
+	n.markPieceAvailableFrom(manifestCID, piece, providerID.String())
 	n.recordPeerDownloadSample(manifestCID, providerID, piece.Size, time.Since(start))
 	logFetchDetail("piece %d fetched from %s (%d bytes)", piece.Index, providerID, piece.Size)
 	return nil

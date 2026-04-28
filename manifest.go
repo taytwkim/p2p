@@ -9,7 +9,7 @@ import (
 
 const (
 	manifestVersion        = 1
-	defaultPieceSize int64 = 5
+	defaultPieceSize int64 = 32
 )
 
 // This is how a manifest of a file is organized.

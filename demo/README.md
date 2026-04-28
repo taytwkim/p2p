@@ -7,7 +7,7 @@ This directory contains demo assets.
 To run the local demo (which spins up Peer A, Peer B, and Peer C, and generates a test `foo.txt` file):
 ```bash
 # run from project root
-./demo/rpc_demo.sh start
+./demo/local/local_demo.sh start
 ```
 
 Watch the terminal as it starts the nodes. Once it completes, first list a remote peer to see the manifest CID for `foo.txt`, then use that manifest CID from Peer C.
@@ -22,7 +22,7 @@ cat peerC_export/foo.txt
 To clean up the spawned log files, temp socket files, `export` directories, and abruptly kill all `tinytorrent` processes:
 
 ```bash
-./demo/rpc_demo.sh clean
+./demo/local/local_demo.sh clean
 ```
 
 ## GCP Cross-VM Demo
